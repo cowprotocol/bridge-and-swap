@@ -2,17 +2,17 @@
     "networks": [
         {
             "name": "arbitrum",
-            "rpc": "https://arbitrum.drpc.org",
+            "rpc": "",
             "deploymentBlock": 445159889,
-            "factoryAddress": "0xeEb5F87D9EA9bBf6D69a5bAbC0D8DFe8Dbd918Be",
+            "factoryAddress": "0x5ae7b59b98d207196b305E80B4b690e3721811b5",
             "orderBookApi": "https://api.cow.fi/arbitrum_one/api/v1",
             "pageSize": 5000
         },
         {
             "name": "base",
-            "rpc": "https://base.drpc.org",
+            "rpc": "",
             "deploymentBlock": 43783294,
-            "factoryAddress": "0xa87832A6D27bF8b0aEBee16F7dAd8c9eF9046ab2",
+            "factoryAddress": "0xFc6F2303c89e6dCe31993BFA83D0B76454eCE384",
             "orderBookApi": "https://api.cow.fi/base/api/v1",
             "pageSize": 5000
         }

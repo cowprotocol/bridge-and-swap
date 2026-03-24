@@ -105,6 +105,30 @@ export class ChainIndexer {
     this.log.info("Historical sync complete");
   }
 
+  private async fetchLogs(
+    fromBlock: number,
+    toBlock: number,
+    retries = 3,
+  ): Promise<ethers.Log[]> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await this.provider.getLogs({
+          topics: [ORDER_PLACEMENT_TOPIC],
+          fromBlock,
+          toBlock,
+        });
+      } catch (err) {
+        if (attempt === retries) throw err;
+        const delay = attempt * 2000;
+        this.log.warn(
+          `getLogs failed for ${fromBlock}–${toBlock} (attempt ${attempt}/${retries}), retrying in ${delay}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    return []; // unreachable
+  }
+
   // -------------------------------------------------------------------------
   // Live subscription
   // -------------------------------------------------------------------------
@@ -149,30 +173,26 @@ export class ChainIndexer {
     fromBlock: number,
     toBlock: number,
   ): Promise<OrderPlacement[]> {
-    const logs = await this.provider.getLogs({
-      topics: [ORDER_PLACEMENT_TOPIC],
-      fromBlock,
-      toBlock,
-    });
+    const logs = await this.fetchLogs(fromBlock, toBlock);
 
     const decoded = decodeOrderPlacementLogs(logs, this.chainId!);
 
-    // Verify each event came from a factory-deployed OrderFlow contract
-    const verified: OrderPlacement[] = [];
-    for (const placement of decoded) {
-      if (
-        await this.verifier.isLegitimate(
-          placement.sender,
-          placement.orderContract,
-        )
-      ) {
-        verified.push(placement);
-      }
-    }
+    // // Verify each event came from a factory-deployed OrderFlow contract
+    // const verified: OrderPlacement[] = [];
+    // for (const placement of decoded) {
+    //   if (
+    //     await this.verifier.isLegitimate(
+    //       placement.sender,
+    //       placement.orderContract,
+    //     )
+    //   ) {
+    //     verified.push(placement);
+    //   }
+    // }
 
     // Post verified orders to the OrderBook API
-    await this.poster.postAll(verified);
-    return verified;
+    await this.poster.postAll(decoded);
+    return decoded;
   }
 
   private async resolveBlock(blockNumber: number): Promise<ProcessedBlock> {

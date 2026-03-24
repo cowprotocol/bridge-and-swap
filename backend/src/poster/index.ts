@@ -99,19 +99,19 @@ export class OrderPoster {
         body: JSON.stringify(body),
       });
 
-      const data = (await response.json()) as OrderBookApiResponse;
+      const data = await response.text();
 
       if (response.ok) {
         placement.status = OrderStatus.POSTED;
         placement.statusReason = undefined;
         this.log.info(
-          `Order ${placement.orderHash} posted successfully. UID: ${data.uid}`,
+          `Order ${placement.orderHash} posted successfully. UID: ${data}`,
         );
         return;
       }
 
-      const errorType = data.errorType ?? "UNKNOWN";
-      const description = data.description ?? "";
+      const errorType = data ?? "UNKNOWN";
+      const description = data ?? "";
       const reason = `${response.status} ${errorType}: ${description}`;
 
       if (response.status === 400 && errorType === "DuplicatedOrder") {

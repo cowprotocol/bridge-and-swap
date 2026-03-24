@@ -44,7 +44,7 @@ export class FactoryVerifier {
       this.cache.set(ownerLower, expectedLower);
 
       if (expectedLower !== emitterLower) {
-        this.log.warn(
+        this.log.debug(
           `Rejected OrderPlacement from ${emitter} for owner ${owner} (expected ${expected})`,
         );
         return false;
@@ -53,7 +53,10 @@ export class FactoryVerifier {
       this.log.debug(`Verified OrderFlow ${emitter} for owner ${owner}`);
       return true;
     } catch (err) {
-      this.log.error(`Failed to verify ${emitter} for owner ${owner}:`, err);
+      this.cache.set(ownerLower, "");
+      this.log.debug(
+        `Rejected OrderPlacement from ${emitter} for owner ${owner} (factory call failed)`,
+      );
       return false;
     }
   }
