@@ -1,0 +1,15 @@
+{
+  "name": "scripts",
+  "version": "0.0.0",
+  "description": "Helper scripts to test the bridge and swap feature",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "MIT or Apache-2.0",
+  "packageManager": "pnpm@10.32.1",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
