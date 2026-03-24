@@ -1,11 +1,19 @@
 {
     "networks": [
         {
-            "name": "sepolia",
-            "rpc": "https://sepolia.drpc.org",
-            "deploymentBlock": 8468184,
-            "factoryAddress": "0x...",
-            "orderBookApi": "https://api.cow.fi/sepolia/api/v1",
+            "name": "arbitrum",
+            "rpc": "https://arbitrum.drpc.org",
+            "deploymentBlock": 445159889,
+            "factoryAddress": "0xeEb5F87D9EA9bBf6D69a5bAbC0D8DFe8Dbd918Be",
+            "orderBookApi": "https://api.cow.fi/arbitrum_one/api/v1",
+            "pageSize": 5000
+        },
+        {
+            "name": "base",
+            "rpc": "https://base.drpc.org",
+            "deploymentBlock": 43783294,
+            "factoryAddress": "0xa87832A6D27bF8b0aEBee16F7dAd8c9eF9046ab2",
+            "orderBookApi": "https://api.cow.fi/base/api/v1",
             "pageSize": 5000
         }
     ]
