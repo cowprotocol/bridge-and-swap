@@ -11,7 +11,7 @@ This repo is divided in three parts. The code for each part is described in its 
 
 - `contracts`
   The smart contracts handling the order after funds are bridged.
-- `watchtower`
-  The service creating new orders on the CoW API.
+- `backend`
+  The service indexing contracts & creating new orders on the CoW API.
 - `frontend`
   An interface for the user to create orders.
