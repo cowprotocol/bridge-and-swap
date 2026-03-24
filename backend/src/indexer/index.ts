@@ -1,23 +1,23 @@
 import { ethers } from "ethers";
 import { Database } from "../db";
-import { NetworkConfig, ProcessedBlock, ConditionalOrder } from "../types";
+import { NetworkConfig, ProcessedBlock, OrderPlacement } from "../types";
 import { createProvider, getLogger, Logger } from "../utils";
-import {
-  CONDITIONAL_ORDER_CREATED_TOPIC,
-  decodeConditionalOrderCreatedLogs,
-} from "./events";
+import { ORDER_PLACEMENT_TOPIC, decodeOrderPlacementLogs } from "./events";
+import { FactoryVerifier } from "./factory";
 
 const DEFAULT_PAGE_SIZE = 5000;
 
 /**
  * A ChainIndexer is responsible for one network:
- *  1. Syncs historical ConditionalOrderCreated events from deploymentBlock (or last checkpoint).
+ *  1. Syncs historical OrderPlacement events from deploymentBlock (or last checkpoint).
  *  2. Subscribes to new blocks and indexes events in real-time.
  */
 export class ChainIndexer {
   private provider: ethers.Provider;
   private log: Logger;
   private running = false;
+  private chainId: number | null = null;
+  private verifier: FactoryVerifier;
 
   constructor(
     private network: NetworkConfig,
@@ -25,11 +25,15 @@ export class ChainIndexer {
   ) {
     this.log = getLogger("ChainIndexer", { chain: network.name });
     this.provider = createProvider(network.rpc);
+    this.verifier = new FactoryVerifier(network.factoryAddress, this.provider);
   }
 
   async start(): Promise<void> {
     this.running = true;
     this.log.info(`Starting indexer for ${this.network.name}`);
+    const network = await this.provider.getNetwork();
+    this.chainId = Number(network.chainId);
+    this.log.info(`Chain ID: ${this.chainId}`);
 
     await this.syncHistorical();
 
@@ -138,18 +142,38 @@ export class ChainIndexer {
   // Helpers
   // -------------------------------------------------------------------------
 
+  /**
+   * Fetch OrderPlacement events.
+   *
+   * No address filter — OrderFlow contracts are dynamically deployed by the
+   * factory, so we filter by topic only and let the deployment block scope
+   * the search range.
+   */
   private async fetchEvents(
     fromBlock: number,
     toBlock: number,
-  ): Promise<ConditionalOrder[]> {
+  ): Promise<OrderPlacement[]> {
     const logs = await this.provider.getLogs({
-      address: this.network.composableCow,
-      topics: [CONDITIONAL_ORDER_CREATED_TOPIC],
+      topics: [ORDER_PLACEMENT_TOPIC],
       fromBlock,
       toBlock,
     });
 
-    return decodeConditionalOrderCreatedLogs(logs, this.network.composableCow);
+    const decoded = decodeOrderPlacementLogs(logs, this.chainId!);
+
+    // Verify each event came from a factory-deployed OrderFlow contract
+    const verified: OrderPlacement[] = [];
+    for (const placement of decoded) {
+      if (
+        await this.verifier.isLegitimate(
+          placement.sender,
+          placement.orderContract,
+        )
+      ) {
+        verified.push(placement);
+      }
+    }
+    return verified;
   }
 
   private async resolveBlock(blockNumber: number): Promise<ProcessedBlock> {

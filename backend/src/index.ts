@@ -13,7 +13,7 @@ async function main() {
   program
     .name("watchtower-lite")
     .description(
-      "Lightweight indexer for ComposableCoW ConditionalOrderCreated events 👀🐮",
+      "Lightweight indexer for OrderPlacement events from OrderFlow contracts 👀🐮",
     )
     .version("1.0.0");
 
@@ -50,7 +50,6 @@ async function main() {
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
 
-      // Run all chain indexers in parallel
       log.info(
         `Starting ${indexers.length} chain indexer(s): ${config.networks.map((n) => n.name).join(", ")}`,
       );
@@ -67,7 +66,7 @@ async function main() {
   program
     .command("dump")
     .description("Dump stored orders for a network")
-    .requiredOption("-n, --network <name>", "Network name to dump")
+    .requiredOption("-n, --network <n>", "Network name to dump")
     .option(
       "-d, --database-path <path>",
       "Path to LevelDB directory",

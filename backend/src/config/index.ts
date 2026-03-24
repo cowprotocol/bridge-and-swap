@@ -47,32 +47,35 @@ function validateNetwork(net: NetworkConfig): void {
     "name",
     "rpc",
     "deploymentBlock",
-    "composableCow",
+    "factoryAddress",
   ];
 
   for (const field of required) {
     if (net[field] === undefined || net[field] === null) {
       throw new Error(
-        `Network '${net.name ?? "unknown"}' is missing required field '${field}'`
+        `Network '${net.name ?? "unknown"}' is missing required field '${field}'`,
       );
     }
   }
 
-  if (!net.rpc.startsWith("http") && !net.rpc.startsWith("ws")) {
+  if (
+    !net.factoryAddress.startsWith("0x") ||
+    net.factoryAddress.length !== 42
+  ) {
     throw new Error(
-      `Network '${net.name}': rpc must be an http(s) or ws(s) URL`
+      `Network '${net.name}': factoryAddress must be a valid Ethereum address`,
     );
   }
 
-  if (!net.composableCow.startsWith("0x") || net.composableCow.length !== 42) {
+  if (!net.rpc.startsWith("http") && !net.rpc.startsWith("ws")) {
     throw new Error(
-      `Network '${net.name}': composableCow must be a valid Ethereum address`
+      `Network '${net.name}': rpc must be an http(s) or ws(s) URL`,
     );
   }
 
   if (typeof net.deploymentBlock !== "number" || net.deploymentBlock < 0) {
     throw new Error(
-      `Network '${net.name}': deploymentBlock must be a non-negative integer`
+      `Network '${net.name}': deploymentBlock must be a non-negative integer`,
     );
   }
 }

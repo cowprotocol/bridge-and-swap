@@ -4,7 +4,7 @@
             "name": "sepolia",
             "rpc": "https://sepolia.drpc.org",
             "deploymentBlock": 8468184,
-            "composableCow": "0xfdaFc9d1902f4e0b84f65F49f244b32b31013b74",
+            "factoryAddress": "0x...",
             "pageSize": 5000
         }
     ]

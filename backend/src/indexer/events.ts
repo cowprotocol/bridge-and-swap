@@ -1,46 +1,137 @@
 import { ethers } from "ethers";
-import { ConditionalOrder } from "../types";
-import type { ConditionalOrderParams } from "@cowprotocol/sdk-composable";
+import { OrderPlacement, GPv2OrderData, OnchainSignature } from "../types";
 import { getLogger } from "../utils";
 
 // ---------------------------------------------------------------------------
-// ConditionalOrderCreated event ABI (from ComposableCoW)
+// OrderPlacement event ABI (from CoWSwapOnchainOrders / OrderFlow)
 // ---------------------------------------------------------------------------
 
-// event ConditionalOrderCreated(address indexed owner, ConditionalOrderParams params)
-// where ConditionalOrderParams = (address handler, bytes32 salt, bytes staticInput)
+// event OrderPlacement(
+//   address indexed sender,
+//   GPv2Order.Data order,
+//   OnchainSignature signature,
+//   bytes data
+// )
 
-const CONDITIONAL_ORDER_CREATED_ABI = [
-  "event ConditionalOrderCreated(address indexed owner, (address handler, bytes32 salt, bytes staticInput) params)",
+const GPV2_SETTLEMENT = "0x9008D19f58AAbD9eD0D60971565AA8510560ab41";
+
+const ORDER_PLACEMENT_ABI = [
+  `event OrderPlacement(
+    address indexed sender,
+    (
+      address sellToken,
+      address buyToken,
+      address receiver,
+      uint256 sellAmount,
+      uint256 buyAmount,
+      uint32 validTo,
+      bytes32 appData,
+      uint256 feeAmount,
+      bytes32 kind,
+      bool partiallyFillable,
+      bytes32 sellTokenBalance,
+      bytes32 buyTokenBalance
+    ) order,
+    (uint8 scheme, bytes data) signature,
+    bytes extraData
+  )`,
 ];
 
-const iface = new ethers.Interface(CONDITIONAL_ORDER_CREATED_ABI);
+const iface = new ethers.Interface(ORDER_PLACEMENT_ABI);
 
-export const CONDITIONAL_ORDER_CREATED_TOPIC = iface.getEvent(
-  "ConditionalOrderCreated",
-)!.topicHash;
+export const ORDER_PLACEMENT_TOPIC =
+  iface.getEvent("OrderPlacement")!.topicHash;
 
 /**
- * Compute the conditional order ID (the leaf hash used as the key in ComposableCoW).
+ * Compute the GPv2 EIP-712 order hash.
+ *
+ * This matches GPv2Order.hash() in the settlement contract.
  */
-export function computeOrderId(params: ConditionalOrderParams): string {
-  return ethers.keccak256(
+export function computeOrderHash(
+  order: GPv2OrderData,
+  domainSeparator: string,
+): string {
+  const GPV2_ORDER_TYPE_HASH =
+    "0xd5a25ba2e97094ad7d83dc28a6572da797d6b3e7fc6663bd93efb789fc17e489";
+
+  const structHash = ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ["address", "bytes32", "bytes"],
-      [params.handler, params.salt, params.staticInput],
+      [
+        "bytes32",
+        "address",
+        "address",
+        "address",
+        "uint256",
+        "uint256",
+        "uint32",
+        "bytes32",
+        "uint256",
+        "bytes32",
+        "bool",
+        "bytes32",
+        "bytes32",
+      ],
+      [
+        GPV2_ORDER_TYPE_HASH,
+        order.sellToken,
+        order.buyToken,
+        order.receiver,
+        order.sellAmount,
+        order.buyAmount,
+        order.validTo,
+        order.appData,
+        order.feeAmount,
+        order.kind,
+        order.partiallyFillable,
+        order.sellTokenBalance,
+        order.buyTokenBalance,
+      ],
+    ),
+  );
+
+  return ethers.keccak256(
+    ethers.solidityPacked(
+      ["bytes1", "bytes1", "bytes32", "bytes32"],
+      ["0x19", "0x01", domainSeparator, structHash],
     ),
   );
 }
 
 /**
- * Decode raw logs into ConditionalOrder objects.
+ * Compute the CoW Swap EIP-712 domain separator for a given settlement address and chain.
  */
-export function decodeConditionalOrderCreatedLogs(
+export function computeDomainSeparator(
+  settlementAddress: string,
+  chainId: number,
+): string {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["bytes32", "bytes32", "bytes32", "uint256", "address"],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+          ),
+        ),
+        ethers.keccak256(ethers.toUtf8Bytes("Gnosis Protocol")),
+        ethers.keccak256(ethers.toUtf8Bytes("v2")),
+        chainId,
+        settlementAddress,
+      ],
+    ),
+  );
+}
+
+/**
+ * Decode raw logs into OrderPlacement objects.
+ */
+export function decodeOrderPlacementLogs(
   logs: ethers.Log[],
-  contractAddress: string,
-): ConditionalOrder[] {
+  chainId: number,
+): OrderPlacement[] {
   const log = getLogger("decodeEvents");
-  const orders: ConditionalOrder[] = [];
+  const placements: OrderPlacement[] = [];
+  const domainSeparator = computeDomainSeparator(GPV2_SETTLEMENT, chainId);
 
   for (const rawLog of logs) {
     try {
@@ -51,27 +142,45 @@ export function decodeConditionalOrderCreatedLogs(
 
       if (!parsed) continue;
 
-      const owner: string = parsed.args[0];
-      const [handler, salt, staticInput] = parsed.args[1];
+      const sender: string = parsed.args[0];
+      const orderTuple = parsed.args[1];
+      const sigTuple = parsed.args[2];
+      const extraData: string = parsed.args[3];
 
-      const params: ConditionalOrderParams = {
-        handler,
-        salt,
-        staticInput,
+      const order: GPv2OrderData = {
+        sellToken: orderTuple[0],
+        buyToken: orderTuple[1],
+        receiver: orderTuple[2],
+        sellAmount: orderTuple[3].toString(),
+        buyAmount: orderTuple[4].toString(),
+        validTo: Number(orderTuple[5]),
+        appData: orderTuple[6],
+        feeAmount: orderTuple[7].toString(),
+        kind: orderTuple[8],
+        partiallyFillable: orderTuple[9],
+        sellTokenBalance: orderTuple[10],
+        buyTokenBalance: orderTuple[11],
       };
 
-      orders.push({
-        id: computeOrderId(params),
-        owner,
+      const signature: OnchainSignature = {
+        scheme: Number(sigTuple[0]),
+        data: sigTuple[1],
+      };
+
+      placements.push({
+        orderHash: computeOrderHash(order, domainSeparator),
+        sender,
+        orderContract: rawLog.address,
+        order,
+        signature,
+        data: extraData,
         tx: rawLog.transactionHash,
         blockNumber: rawLog.blockNumber,
-        params,
-        composableCow: contractAddress,
       });
     } catch (err) {
       log.warn(`Failed to decode log in tx ${rawLog.transactionHash}:`, err);
     }
   }
 
-  return orders;
+  return placements;
 }

@@ -1,5 +1,5 @@
 import { Level } from "level";
-import { ConditionalOrder, ProcessedBlock } from "../types";
+import { OrderPlacement, ProcessedBlock } from "../types";
 import { getLogger, Logger } from "../utils";
 
 function networkKey(prefix: string, network: string): string {
@@ -49,34 +49,43 @@ export class Database {
   }
 
   // -------------------------------------------------------------------------
-  // Conditional orders
+  // Order placements
   // -------------------------------------------------------------------------
 
-  async getOrders(network: string): Promise<ConditionalOrder[]> {
+  async getOrders(network: string): Promise<OrderPlacement[]> {
     try {
       const raw = await this.db.get(KEY.orders(network));
-      return JSON.parse(raw) as ConditionalOrder[];
+      return JSON.parse(raw) as OrderPlacement[];
     } catch {
       return [];
     }
   }
 
-  async saveOrders(network: string, orders: ConditionalOrder[]): Promise<void> {
+  async saveOrders(network: string, orders: OrderPlacement[]): Promise<void> {
     await this.db.put(KEY.orders(network), JSON.stringify(orders));
   }
 
-  async addOrder(network: string, order: ConditionalOrder): Promise<void> {
+  async addOrder(network: string, order: OrderPlacement): Promise<void> {
     const existing = await this.getOrders(network);
 
-    // Deduplicate by order id
-    if (existing.some((o) => o.id === order.id)) {
-      this.log.debug(`Order ${order.id} already exists, skipping`);
+    // Deduplicate by tx hash + log position (same event can't appear twice)
+    if (
+      existing.some(
+        (o) =>
+          o.tx === order.tx &&
+          o.orderContract === order.orderContract &&
+          o.sender === order.sender,
+      )
+    ) {
+      this.log.debug(`Order from tx ${order.tx} already exists, skipping`);
       return;
     }
 
     existing.push(order);
     await this.saveOrders(network, existing);
-    this.log.debug(`Stored order ${order.id} (total: ${existing.length})`);
+    this.log.debug(
+      `Stored order from tx ${order.tx} (total: ${existing.length})`,
+    );
   }
 
   /**
@@ -85,7 +94,7 @@ export class Database {
    */
   async commitBatch(
     network: string,
-    newOrders: ConditionalOrder[],
+    newOrders: OrderPlacement[],
     block: ProcessedBlock,
   ): Promise<void> {
     if (newOrders.length === 0) {
@@ -95,8 +104,14 @@ export class Database {
     }
 
     const existing = await this.getOrders(network);
-    const existingIds = new Set(existing.map((o) => o.id));
-    const deduped = newOrders.filter((o) => !existingIds.has(o.id));
+
+    // Deduplicate: use tx + orderContract + sender as composite key
+    const existingKeys = new Set(
+      existing.map((o) => `${o.tx}:${o.orderContract}:${o.sender}`),
+    );
+    const deduped = newOrders.filter(
+      (o) => !existingKeys.has(`${o.tx}:${o.orderContract}:${o.sender}`),
+    );
 
     const merged = [...existing, ...deduped];
 

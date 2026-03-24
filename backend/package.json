@@ -19,7 +19,6 @@
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@cowprotocol/sdk-composable": "^0.2.3",
     "@types/node": "^20.0.0",
     "jest": "^30.3.0",
     "prettier": "^3.0.0",
