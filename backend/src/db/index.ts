@@ -69,22 +69,15 @@ export class Database {
     const existing = await this.getOrders(network);
 
     // Deduplicate by tx hash + log position (same event can't appear twice)
-    if (
-      existing.some(
-        (o) =>
-          o.tx === order.tx &&
-          o.orderContract === order.orderContract &&
-          o.sender === order.sender,
-      )
-    ) {
-      this.log.debug(`Order from tx ${order.tx} already exists, skipping`);
+    if (existing.some((o) => o.orderHash === order.orderHash)) {
+      this.log.debug(`Order ${order.orderHash} already exists, skipping`);
       return;
     }
 
     existing.push(order);
     await this.saveOrders(network, existing);
     this.log.debug(
-      `Stored order from tx ${order.tx} (total: ${existing.length})`,
+      `Stored order ${order.orderHash} (total: ${existing.length})`,
     );
   }
 
@@ -105,13 +98,8 @@ export class Database {
 
     const existing = await this.getOrders(network);
 
-    // Deduplicate: use tx + orderContract + sender as composite key
-    const existingKeys = new Set(
-      existing.map((o) => `${o.tx}:${o.orderContract}:${o.sender}`),
-    );
-    const deduped = newOrders.filter(
-      (o) => !existingKeys.has(`${o.tx}:${o.orderContract}:${o.sender}`),
-    );
+    const existingHashes = new Set(existing.map((o) => o.orderHash));
+    const deduped = newOrders.filter((o) => !existingHashes.has(o.orderHash));
 
     const merged = [...existing, ...deduped];
 
