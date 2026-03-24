@@ -48,6 +48,7 @@ function validateNetwork(net: NetworkConfig): void {
     "rpc",
     "deploymentBlock",
     "factoryAddress",
+    "orderBookApi",
   ];
 
   for (const field of required) {
@@ -76,6 +77,12 @@ function validateNetwork(net: NetworkConfig): void {
   if (typeof net.deploymentBlock !== "number" || net.deploymentBlock < 0) {
     throw new Error(
       `Network '${net.name}': deploymentBlock must be a non-negative integer`,
+    );
+  }
+
+  if (!net.orderBookApi.startsWith("http")) {
+    throw new Error(
+      `Network '${net.name}': orderBookApi must be an HTTP(S) URL`,
     );
   }
 }

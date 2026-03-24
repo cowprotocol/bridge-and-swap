@@ -50,6 +50,10 @@ export interface OrderPlacement {
   tx: string;
   /** Block number */
   blockNumber: number;
+  /** Whether this order has been posted to the OrderBook API */
+  status: OrderStatus;
+  /** Error message if posting failed */
+  statusReason?: string;
 }
 
 /**
@@ -80,6 +84,8 @@ export interface NetworkConfig {
    * @default 5000
    */
   pageSize?: number;
+  /** OrderBook API base URL */
+  orderBookApi: string;
 }
 
 export interface Config {
@@ -94,4 +100,13 @@ export interface RunOptions {
   configPath: string;
   databasePath: string;
   logLevel: string;
+}
+
+/**
+ * Posting status for an indexed order.
+ */
+export enum OrderStatus {
+  PENDING = "PENDING",
+  POSTED = "POSTED",
+  FAILED = "FAILED",
 }

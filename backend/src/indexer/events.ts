@@ -1,5 +1,10 @@
 import { ethers } from "ethers";
-import { OrderPlacement, GPv2OrderData, OnchainSignature } from "../types";
+import {
+  OrderPlacement,
+  GPv2OrderData,
+  OnchainSignature,
+  OrderStatus,
+} from "../types";
 import { getLogger } from "../utils";
 
 // ---------------------------------------------------------------------------
@@ -176,6 +181,7 @@ export function decodeOrderPlacementLogs(
         data: extraData,
         tx: rawLog.transactionHash,
         blockNumber: rawLog.blockNumber,
+        status: OrderStatus.PENDING,
       });
     } catch (err) {
       log.warn(`Failed to decode log in tx ${rawLog.transactionHash}:`, err);

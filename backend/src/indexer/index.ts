@@ -4,6 +4,7 @@ import { NetworkConfig, ProcessedBlock, OrderPlacement } from "../types";
 import { createProvider, getLogger, Logger } from "../utils";
 import { ORDER_PLACEMENT_TOPIC, decodeOrderPlacementLogs } from "./events";
 import { FactoryVerifier } from "./factory";
+import { OrderPoster } from "../poster";
 
 const DEFAULT_PAGE_SIZE = 5000;
 
@@ -18,6 +19,7 @@ export class ChainIndexer {
   private running = false;
   private chainId: number | null = null;
   private verifier: FactoryVerifier;
+  private poster: OrderPoster;
 
   constructor(
     private network: NetworkConfig,
@@ -26,6 +28,7 @@ export class ChainIndexer {
     this.log = getLogger("ChainIndexer", { chain: network.name });
     this.provider = createProvider(network.rpc);
     this.verifier = new FactoryVerifier(network.factoryAddress, this.provider);
+    this.poster = new OrderPoster(network.orderBookApi);
   }
 
   async start(): Promise<void> {
@@ -142,13 +145,6 @@ export class ChainIndexer {
   // Helpers
   // -------------------------------------------------------------------------
 
-  /**
-   * Fetch OrderPlacement events.
-   *
-   * No address filter — OrderFlow contracts are dynamically deployed by the
-   * factory, so we filter by topic only and let the deployment block scope
-   * the search range.
-   */
   private async fetchEvents(
     fromBlock: number,
     toBlock: number,
@@ -173,6 +169,9 @@ export class ChainIndexer {
         verified.push(placement);
       }
     }
+
+    // Post verified orders to the OrderBook API
+    await this.poster.postAll(verified);
     return verified;
   }
 
