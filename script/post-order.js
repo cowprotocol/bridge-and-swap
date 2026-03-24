@@ -4,9 +4,9 @@ import {
   http,
   encodeAbiParameters,
   parseAbiParameters,
-} from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { base } from 'viem/chains';
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { base } from "viem/chains";
 
 // ============================================================
 // Configuration — all from environment variables
@@ -18,16 +18,16 @@ const required = (name) => {
   return val;
 };
 
-const PRIVATE_KEY = required('PRIVATE_KEY');
-const FACTORY_ADDRESS = required('FACTORY_ADDRESS');
-const SOURCE_TOKEN = required('SOURCE_TOKEN');        // e.g. 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 (USDC on Base)
-const DEST_TOKEN = required('DEST_TOKEN');            // token received on dest chain (Bungee output / CoW sell token)
-const BUY_TOKEN = required('BUY_TOKEN');              // token to buy via CoW on dest chain
-const SEND_AMOUNT = required('SEND_AMOUNT');          // raw amount in source token smallest unit
-const MIN_BUY_AMOUNT = required('MIN_BUY_AMOUNT');    // minimum buy token amount on dest chain (smallest unit)
-const SOURCE_CHAIN_ID = required('SOURCE_CHAIN_ID');
-const DEST_CHAIN_ID = required('DEST_CHAIN_ID');
-const SOURCE_CHAIN_RPC_URL = required('SOURCE_CHAIN_RPC_URL');
+const PRIVATE_KEY = required("PRIVATE_KEY");
+const FACTORY_ADDRESS = required("FACTORY_ADDRESS");
+const SOURCE_TOKEN = required("SOURCE_TOKEN"); // e.g. 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 (USDC on Base)
+const DEST_TOKEN = required("DEST_TOKEN"); // token received on dest chain (Bungee output / CoW sell token)
+const BUY_TOKEN = required("BUY_TOKEN"); // token to buy via CoW on dest chain
+const SEND_AMOUNT = required("SEND_AMOUNT"); // raw amount in source token smallest unit
+const MIN_BUY_AMOUNT = required("MIN_BUY_AMOUNT"); // minimum buy token amount on dest chain (smallest unit)
+const SOURCE_CHAIN_ID = required("SOURCE_CHAIN_ID");
+const DEST_CHAIN_ID = required("DEST_CHAIN_ID");
+const SOURCE_CHAIN_RPC_URL = required("SOURCE_CHAIN_RPC_URL");
 
 const account = privateKeyToAccount(PRIVATE_KEY);
 
@@ -61,7 +61,7 @@ const cowOrderParams = {
   buyAmount: MIN_BUY_AMOUNT,
   appData: "0x0000000000000000000000000000000000000000000000000000000000000000",
   feeAmount: "0",
-  validTo: Math.floor(Date.now() / 1000) + 3600,
+  validTo: Math.floor(Date.now() / 1000) + 5 * 60,
   partiallyFillable: false,
   quoteId: 0,
 };
@@ -77,16 +77,16 @@ function encodeOrderFlowPayload(params) {
   //  bool partiallyFillable, int64 quoteId)
   return encodeAbiParameters(
     parseAbiParameters([
-      'address sellToken',
-      'address buyToken',
-      'address receiver',
-      'address owner',
-      'uint256 buyAmount',
-      'bytes32 appData',
-      'uint256 feeAmount',
-      'uint32 validTo',
-      'bool partiallyFillable',
-      'int64 quoteId',
+      "address sellToken",
+      "address buyToken",
+      "address receiver",
+      "address owner",
+      "uint256 buyAmount",
+      "bytes32 appData",
+      "uint256 feeAmount",
+      "uint32 validTo",
+      "bool partiallyFillable",
+      "int64 quoteId",
     ]),
     [
       params.sellToken,
@@ -99,7 +99,7 @@ function encodeOrderFlowPayload(params) {
       params.validTo,
       params.partiallyFillable,
       params.quoteId,
-    ]
+    ],
   );
 }
 
@@ -118,7 +118,7 @@ async function getQuote(params) {
 
   if (!data.success) {
     throw new Error(
-      `Quote error: ${data.statusCode}: ${data.message}. server-req-id: ${serverReqId}`
+      `Quote error: ${data.statusCode}: ${data.message}. server-req-id: ${serverReqId}`,
     );
   }
 
@@ -218,7 +218,12 @@ async function viemSignTypedData(signTypedData) {
   });
 }
 
-async function submitSignedRequest(requestType, request, userSignature, quoteId) {
+async function submitSignedRequest(
+  requestType,
+  request,
+  userSignature,
+  quoteId,
+) {
   const response = await fetch(`${BUNGEE_API_BASE_URL}/api/v1/bungee/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -235,7 +240,7 @@ async function submitSignedRequest(requestType, request, userSignature, quoteId)
 
 async function checkStatus(requestHash) {
   const response = await fetch(
-    `${BUNGEE_API_BASE_URL}/api/v1/bungee/status?requestHash=${requestHash}`
+    `${BUNGEE_API_BASE_URL}/api/v1/bungee/status?requestHash=${requestHash}`,
   );
   const data = await response.json();
   if (!data.success) {
@@ -251,7 +256,10 @@ async function checkStatus(requestHash) {
 async function main() {
   console.log("Encoding OrderFlowOrder payload for destination chain...");
   const destinationPayload = encodeOrderFlowPayload(cowOrderParams);
-  console.log(`Payload (${destinationPayload.length} chars):`, destinationPayload.slice(0, 66) + "...");
+  console.log(
+    `Payload (${destinationPayload.length} chars):`,
+    destinationPayload.slice(0, 66) + "...",
+  );
 
   // Attach destination payload parameters to the quote request
   quoteParams.destinationPayload = destinationPayload;
@@ -283,13 +291,15 @@ async function main() {
     requestType,
     witness,
     signature,
-    quote.quoteId
+    quote.quoteId,
   );
 
   console.log(
     "\n4. Submission complete:",
-    "\n- Hash:", submitResult.requestHash,
-    "\n- Type:", submitResult.requestType
+    "\n- Hash:",
+    submitResult.requestHash,
+    "\n- Type:",
+    submitResult.requestType,
   );
 
   console.log("\nPolling status...");
@@ -306,7 +316,8 @@ async function main() {
 
   console.log(
     "\n5. Complete!",
-    "\n- Destination tx:", status.destinationData?.txHash || "N/A"
+    "\n- Destination tx:",
+    status.destinationData?.txHash || "N/A",
   );
 }
 
