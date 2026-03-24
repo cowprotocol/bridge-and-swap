@@ -1,0 +1,12 @@
+{
+    "networks": [
+        {
+            "name": "sepolia",
+            "rpc": "https://sepolia.drpc.org",
+            "deploymentBlock": 8468184,
+            "factoryAddress": "0x...",
+            "orderBookApi": "https://api.cow.fi/sepolia/api/v1",
+            "pageSize": 5000
+        }
+    ]
+}
