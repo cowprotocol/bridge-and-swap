@@ -78,8 +78,6 @@ contract OrderFlowHarness is OrderFlow {
 
     function orderHash() external view returns (bytes32) { return _orderHash; }
     function ownerState() external view returns (address) { return _ownerState; }
-    function orderOwner() external view returns (address) { return _orderOwner; }
-    function sellAmount() external view returns (uint256) { return _sellAmount; }
 }
 
 contract OrderFlowTest is Test {
@@ -94,6 +92,11 @@ contract OrderFlowTest is Test {
     address public vaultRelayer;
     address public owner;
     address public receiver;
+
+    // Default funding: 1 ether sell + 0.01 ether fee
+    uint256 constant DEFAULT_SELL = 1 ether;
+    uint256 constant DEFAULT_FEE = 0.01 ether;
+    uint256 constant DEFAULT_FUND = DEFAULT_SELL + DEFAULT_FEE;
 
     function setUp() public {
         vaultRelayer = makeAddr("vaultRelayer");
@@ -112,30 +115,28 @@ contract OrderFlowTest is Test {
             buyToken: IERC20(address(buyToken)),
             receiver: receiver,
             owner: owner,
-            sellAmount: 1 ether,
             buyAmount: 2000e6,
             appData: bytes32(uint256(1)),
-            feeAmount: 0.01 ether,
+            feeAmount: DEFAULT_FEE,
             validTo: uint32(block.timestamp + 1 hours),
             partiallyFillable: false,
             quoteId: 42
         });
     }
 
-    function _orderAmount(OrderFlowOrder.Data memory order) internal pure returns (uint256) {
-        return order.sellAmount + order.feeAmount;
-    }
-
-    function _fundCounterfactualAddress(OrderFlowOrder.Data memory order) internal returns (address) {
+    function _fundCounterfactualAddress(OrderFlowOrder.Data memory order, uint256 amount) internal returns (address) {
         address predicted = factory.getOrderFlowAddress(order);
-        tokenA.mint(predicted, _orderAmount(order));
+        tokenA.mint(predicted, amount);
         return predicted;
     }
 
-    /// @dev Deploys a harness directly (not via factory) for reading internal state.
+    function _fundCounterfactualAddress(OrderFlowOrder.Data memory order) internal returns (address) {
+        return _fundCounterfactualAddress(order, DEFAULT_FUND);
+    }
+
     function _deployHarness(OrderFlowOrder.Data memory order) internal returns (OrderFlowHarness) {
         OrderFlowHarness h = new OrderFlowHarness(ICoWSwapSettlement(address(settlement)), order);
-        tokenA.mint(address(h), _orderAmount(order));
+        tokenA.mint(address(h), DEFAULT_FUND);
         return h;
     }
 
@@ -151,7 +152,7 @@ contract OrderFlowTest is Test {
     function test_getOrderFlowAddress_differentForDifferentOrders() public view {
         OrderFlowOrder.Data memory order1 = _defaultOrder();
         OrderFlowOrder.Data memory order2 = _defaultOrder();
-        order2.sellAmount = 2 ether;
+        order2.buyAmount = 9999e6;
         assertTrue(factory.getOrderFlowAddress(order1) != factory.getOrderFlowAddress(order2));
     }
 
@@ -213,7 +214,6 @@ contract OrderFlowTest is Test {
     function test_createOrder_setsState() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         OrderFlowHarness h = _deployHarness(order);
-
         bytes32 oHash = h.createOrder();
 
         assertEq(h.orderHash(), oHash);
@@ -223,17 +223,18 @@ contract OrderFlowTest is Test {
 
     function test_createOrder_revertsIfCalledTwice() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlowHarness h = _deployHarness(order);
-        h.createOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed,) = factory.triggerOrderCreation(order);
 
         vm.expectRevert(IOrderFlow.OrderAlreadyCreated.selector);
-        h.createOrder();
+        OrderFlow(deployed).createOrder();
     }
 
     function test_createOrder_revertsIfInsufficientBalance() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-        tokenA.mint(address(flow), order.sellAmount); // Missing feeAmount
+        // Fund less than fee
+        tokenA.mint(address(flow), DEFAULT_FEE - 1);
 
         vm.expectRevert(IOrderFlow.InsufficientBalance.selector);
         flow.createOrder();
@@ -242,8 +243,7 @@ contract OrderFlowTest is Test {
     function test_createOrder_revertsIfReceiverNotSet() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         order.receiver = address(0);
-        address predicted = factory.getOrderFlowAddress(order);
-        tokenA.mint(predicted, _orderAmount(order));
+        _fundCounterfactualAddress(order);
 
         vm.expectRevert(OrderFlowOrder.ReceiverMustBeSet.selector);
         factory.triggerOrderCreation(order);
@@ -257,7 +257,6 @@ contract OrderFlowTest is Test {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
         (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
-
         assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), GPv2EIP1271.MAGICVALUE);
     }
 
@@ -277,7 +276,6 @@ contract OrderFlowTest is Test {
 
         vm.prank(owner);
         OrderFlow(deployed).invalidateOrder();
-
         assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), bytes4(type(uint32).max));
     }
 
@@ -285,14 +283,12 @@ contract OrderFlowTest is Test {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
         (address deployed,) = factory.triggerOrderCreation(order);
-
         assertEq(OrderFlow(deployed).isValidSignature(bytes32(uint256(999)), ""), bytes4(type(uint32).max));
     }
 
     function test_isValidSignature_beforeCreateOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-
         assertEq(flow.isValidSignature(bytes32(uint256(1)), ""), bytes4(type(uint32).max));
     }
 
@@ -307,7 +303,6 @@ contract OrderFlowTest is Test {
 
         vm.prank(owner);
         h.invalidateOrder();
-
         assertEq(h.ownerState(), OrderFlowOrder.INVALIDATED_OWNER);
     }
 
@@ -317,7 +312,6 @@ contract OrderFlowTest is Test {
         (address deployed,) = factory.triggerOrderCreation(order);
 
         vm.warp(order.validTo + 1);
-
         vm.prank(makeAddr("anyone"));
         OrderFlow(deployed).invalidateOrder();
     }
@@ -361,52 +355,8 @@ contract OrderFlowTest is Test {
         uint256 ownerBefore = tokenA.balanceOf(owner);
         vm.prank(owner);
         OrderFlow(deployed).invalidateOrder();
-
-        assertEq(tokenA.balanceOf(owner) - ownerBefore, _orderAmount(order));
-    }
-
-    function test_invalidateOrder_refundsCorrectAmountWhenPartiallyFilled() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        order.partiallyFillable = true;
-        address predicted = factory.getOrderFlowAddress(order);
-        tokenA.mint(predicted, _orderAmount(order));
-        (address deployed, bytes32 oHash) = factory.triggerOrderCreation(order);
-
-        uint256 filledAmount = order.sellAmount / 2;
-        GPv2Order.Data memory cowSwapOrder = order.toCoWSwapOrder();
-        bytes memory orderUid = new bytes(GPv2Order.UID_LENGTH);
-        orderUid.packOrderUidParams(oHash, deployed, cowSwapOrder.validTo);
-        settlement.setFilledAmount(orderUid, filledAmount);
-
-        uint256 ownerBefore = tokenA.balanceOf(owner);
-        vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
-
-        uint256 expectedFeeRefund = order.feeAmount - ((order.feeAmount * filledAmount) / order.sellAmount);
-        uint256 expectedRefund = order.sellAmount - filledAmount + expectedFeeRefund;
-        assertEq(tokenA.balanceOf(owner) - ownerBefore, expectedRefund);
-    }
-
-    function test_invalidateOrder_noTransferForFullyFilled() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        order.partiallyFillable = true;
-        address predicted = factory.getOrderFlowAddress(order);
-        tokenA.mint(predicted, _orderAmount(order));
-        (address deployed, bytes32 oHash) = factory.triggerOrderCreation(order);
-
-        GPv2Order.Data memory cowSwapOrder = order.toCoWSwapOrder();
-        bytes memory orderUid = new bytes(GPv2Order.UID_LENGTH);
-        orderUid.packOrderUidParams(oHash, deployed, cowSwapOrder.validTo);
-        settlement.setFilledAmount(orderUid, order.sellAmount);
-
-        // Simulate vaultRelayer pulling tokens
-        vm.prank(deployed);
-        tokenA.transfer(vaultRelayer, _orderAmount(order));
-
-        vm.warp(order.validTo + 1);
-        OrderFlow(deployed).invalidateOrder();
-
-        assertEq(tokenA.balanceOf(owner), 0);
+        // Refund = sellAmount + feeAmount = entire balance
+        assertEq(tokenA.balanceOf(owner) - ownerBefore, DEFAULT_FUND);
     }
 
     function test_invalidateOrder_emitsOrderInvalidationForValidOrder() public {
@@ -453,12 +403,13 @@ contract OrderFlowTest is Test {
 
     function test_toCoWSwapOrder_correctMapping() public view {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        GPv2Order.Data memory cowOrder = order.toCoWSwapOrder();
+        uint256 sellAmt = 1 ether;
+        GPv2Order.Data memory cowOrder = order.toCoWSwapOrder(sellAmt);
 
         assertEq(address(cowOrder.sellToken), address(order.sellToken));
         assertEq(address(cowOrder.buyToken), address(order.buyToken));
         assertEq(cowOrder.receiver, order.receiver);
-        assertEq(cowOrder.sellAmount, order.sellAmount);
+        assertEq(cowOrder.sellAmount, sellAmt);
         assertEq(cowOrder.buyAmount, order.buyAmount);
         assertEq(cowOrder.validTo, type(uint32).max);
         assertEq(cowOrder.appData, order.appData);
@@ -479,7 +430,7 @@ contract OrderFlowTest is Test {
         address predicted = factory.getOrderFlowAddress(order);
         assertEq(predicted.code.length, 0);
 
-        tokenA.mint(predicted, _orderAmount(order));
+        tokenA.mint(predicted, DEFAULT_FUND);
 
         (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
         assertEq(deployed, predicted);
@@ -495,30 +446,20 @@ contract OrderFlowTest is Test {
 
         OrderFlowOrder.Data memory m;
 
-        m = _defaultOrder(); m.sellAmount = 2 ether;
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "sellAmount");
-
         m = _defaultOrder(); m.buyAmount = 999;
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "buyAmount");
-
         m = _defaultOrder(); m.receiver = address(1);
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "receiver");
-
         m = _defaultOrder(); m.owner = address(1);
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "owner");
-
         m = _defaultOrder(); m.feeAmount = 999;
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "feeAmount");
-
         m = _defaultOrder(); m.validTo = uint32(block.timestamp + 2 hours);
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "validTo");
-
         m = _defaultOrder(); m.partiallyFillable = true;
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "partiallyFillable");
-
         m = _defaultOrder(); m.quoteId = 999;
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "quoteId");
-
         m = _defaultOrder(); m.appData = bytes32(uint256(999));
         assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "appData");
     }
@@ -545,44 +486,17 @@ contract OrderFlowTest is Test {
 
     function test_executeData_createsOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        tokenA.mint(address(factory), _orderAmount(order));
+        tokenA.mint(address(factory), DEFAULT_FUND);
 
         factory.executeData(
             bytes32(0),
-            _bungeeAmounts(_orderAmount(order)),
+            _bungeeAmounts(DEFAULT_FUND),
             _bungeeTokens(address(tokenA)),
             _encodeBungeeCallData(order)
         );
 
         address orderFlow = factory.getOrderFlowAddress(order);
         assertTrue(orderFlow.code.length > 0);
-    }
-
-    function test_executeData_isValidSignatureAfterBungee() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        tokenA.mint(address(factory), _orderAmount(order));
-
-        factory.executeData(
-            bytes32(0),
-            _bungeeAmounts(_orderAmount(order)),
-            _bungeeTokens(address(tokenA)),
-            _encodeBungeeCallData(order)
-        );
-
-        address orderFlow = factory.getOrderFlowAddress(order);
-        // Compute order hash the same way the contract does
-        GPv2Order.Data memory cowOrder = order.toCoWSwapOrder();
-        bytes32 domainSep = keccak256(
-            abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256("Gnosis Protocol"),
-                keccak256("v2"),
-                block.chainid,
-                address(settlement)
-            )
-        );
-        bytes32 oHash = cowOrder.hash(domainSep);
-        assertEq(OrderFlow(orderFlow).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
     }
 
     function test_executeData_revertsIfNoTokens() public {
@@ -594,12 +508,12 @@ contract OrderFlowTest is Test {
     function test_executeData_revertsIfTokenMismatch() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         MockERC20 wrongToken = new MockERC20();
-        wrongToken.mint(address(factory), _orderAmount(order));
+        wrongToken.mint(address(factory), DEFAULT_FUND);
 
         vm.expectRevert(IOrderFlowFactory.BungeeTokenMismatch.selector);
         factory.executeData(
             bytes32(0),
-            _bungeeAmounts(_orderAmount(order)),
+            _bungeeAmounts(DEFAULT_FUND),
             _bungeeTokens(address(wrongToken)),
             _encodeBungeeCallData(order)
         );
@@ -607,12 +521,13 @@ contract OrderFlowTest is Test {
 
     function test_executeData_revertsIfAmountInsufficient() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        tokenA.mint(address(factory), order.sellAmount);
+        uint256 tooLow = order.feeAmount - 1;
+        tokenA.mint(address(factory), tooLow);
 
         vm.expectRevert(IOrderFlowFactory.BungeeAmountInsufficient.selector);
         factory.executeData(
             bytes32(0),
-            _bungeeAmounts(order.sellAmount),
+            _bungeeAmounts(tooLow),
             _bungeeTokens(address(tokenA)),
             _encodeBungeeCallData(order)
         );
@@ -620,7 +535,7 @@ contract OrderFlowTest is Test {
 
     function test_executeData_excessForwarded() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        uint256 total = _orderAmount(order) + 0.5 ether;
+        uint256 total = DEFAULT_FUND + 0.5 ether;
         tokenA.mint(address(factory), total);
 
         factory.executeData(
@@ -638,19 +553,19 @@ contract OrderFlowTest is Test {
     function test_executeData_mixedWithDirectFlow() public {
         // Order 1 via Bungee
         OrderFlowOrder.Data memory order1 = _defaultOrder();
-        tokenA.mint(address(factory), _orderAmount(order1));
+        tokenA.mint(address(factory), DEFAULT_FUND);
         factory.executeData(
             bytes32(0),
-            _bungeeAmounts(_orderAmount(order1)),
+            _bungeeAmounts(DEFAULT_FUND),
             _bungeeTokens(address(tokenA)),
             _encodeBungeeCallData(order1)
         );
 
-        // Order 2 via direct flow (different params = different contract)
+        // Order 2 via direct flow (different order data = different contract)
         OrderFlowOrder.Data memory order2 = _defaultOrder();
-        order2.sellAmount = 2 ether;
+        order2.buyAmount = 5000e6;
         address predicted2 = factory.getOrderFlowAddress(order2);
-        tokenA.mint(predicted2, _orderAmount(order2));
+        tokenA.mint(predicted2, DEFAULT_FUND);
         factory.triggerOrderCreation(order2);
 
         address flow1 = factory.getOrderFlowAddress(order1);
@@ -663,19 +578,17 @@ contract OrderFlowTest is Test {
     // Fuzz Tests
     // ============================================================
 
-    function testFuzz_createOrder_balanceCheck(uint256 sellAmt, uint256 feeAmt, uint256 balance) public {
-        sellAmt = bound(sellAmt, 1, type(uint128).max);
-        feeAmt = bound(feeAmt, 0, type(uint128).max - sellAmt);
-        balance = bound(balance, 0, sellAmt + feeAmt);
+    function testFuzz_createOrder_balanceCheck(uint256 feeAmt, uint256 balance) public {
+        feeAmt = bound(feeAmt, 1, type(uint128).max);
+        balance = bound(balance, 0, feeAmt);
 
         OrderFlowOrder.Data memory order = _defaultOrder();
-        order.sellAmount = sellAmt;
         order.feeAmount = feeAmt;
 
         OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
         tokenA.mint(address(flow), balance);
 
-        if (balance < sellAmt + feeAmt) {
+        if (balance < feeAmt) {
             vm.expectRevert(IOrderFlow.InsufficientBalance.selector);
         }
         flow.createOrder();

@@ -44,7 +44,7 @@ contract OrderFlowFactory is IOrderFlowFactory {
         if (tokens[0] != address(order.sellToken)) {
             revert BungeeTokenMismatch();
         }
-        if (amounts[0] < order.sellAmount + order.feeAmount) {
+        if (amounts[0] < order.feeAmount) {
             revert BungeeAmountInsufficient();
         }
 

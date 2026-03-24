@@ -36,6 +36,9 @@ contract OrderFlow is
     bool internal immutable _partiallyFillable;
     int64 internal immutable _quoteId;
 
+    /// @dev The sell amount determined at order creation time (balance - feeAmount).
+    uint256 internal _sellAmount;
+
     /// @dev The CoW Swap order hash, set when createOrder is called.
     bytes32 internal _orderHash;
 
@@ -71,9 +74,12 @@ contract OrderFlow is
             revert OrderAlreadyCreated();
         }
 
-        if (_sellToken.balanceOf(address(this)) < _feeAmount) {
+        uint256 balance = _sellToken.balanceOf(address(this));
+        if (balance < _feeAmount) {
             revert InsufficientBalance();
         }
+
+        _sellAmount = balance - _feeAmount;
 
         OrderFlowOrder.Data memory order = _orderData();
 
@@ -86,7 +92,7 @@ contract OrderFlow is
 
         _orderHash = broadcastOrder(
             orderOwner,
-            order.toCoWSwapOrder(),
+            order.toCoWSwapOrder(_sellAmount),
             signature,
             data
         );
@@ -114,7 +120,7 @@ contract OrderFlow is
 
         _ownerState = OrderFlowOrder.INVALIDATED_OWNER;
 
-        GPv2Order.Data memory cowSwapOrder = _orderData().toCoWSwapOrder();
+        GPv2Order.Data memory cowSwapOrder = _orderData().toCoWSwapOrder(_sellAmount);
 
         bytes memory orderUid = new bytes(GPv2Order.UID_LENGTH);
         orderUid.packOrderUidParams(
@@ -179,7 +185,6 @@ contract OrderFlow is
             buyToken: _buyToken,
             receiver: _receiver,
             owner: orderOwner,
-            sellAmount: IERC20(_sellToken).balanceOf(address(this)),
             buyAmount: _buyAmount,
             appData: _appData,
             feeAmount: _feeAmount,
