@@ -28,8 +28,6 @@ library OrderFlowOrder {
         /// In the bridge-and-swap flow, this is set by the source chain initiator since msg.sender on the
         /// destination chain is the factory contract.
         address owner;
-        /// @dev The exact amount of sellToken that should be sold in this order.
-        uint256 sellAmount;
         /// @dev The minimum amount of buyToken that should be received to settle this order.
         uint256 buyAmount;
         /// @dev Extra data to include in the order. It is used by the CoW Swap infrastructure as extra information on
@@ -61,7 +59,7 @@ library OrderFlowOrder {
     ///
     /// @param order The order flow order to be converted.
     /// @return The CoW Swap order data that represents the user order in the order flow contract.
-    function toCoWSwapOrder(Data memory order)
+    function toCoWSwapOrder(Data memory order, uint256 sellAmount)
         internal
         pure
         returns (GPv2Order.Data memory)
@@ -75,7 +73,7 @@ library OrderFlowOrder {
                 order.sellToken, // IERC20 sellToken
                 order.buyToken, // IERC20 buyToken
                 order.receiver, // address receiver
-                order.sellAmount, // uint256 sellAmount
+                sellAmount, // uint256 sellAmount
                 order.buyAmount, // uint256 buyAmount
                 type(uint32).max, // uint32 validTo - never expires on-chain; real expiry via isValidSignature
                 order.appData, // bytes32 appData

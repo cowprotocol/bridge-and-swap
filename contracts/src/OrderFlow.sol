@@ -23,65 +23,55 @@ contract OrderFlow is
     using GPv2Order for GPv2Order.Data;
     using GPv2Order for bytes;
 
-    /// @dev The address of the CoW Swap settlement contract.
-    ICoWSwapSettlement public immutable cowSwapSettlement;
+    ICoWSwapSettlement internal immutable _cowSwapSettlement;
 
-    /// @dev Order parameters stored as immutables (bound at construction).
-    IERC20 public immutable sellToken;
-    IERC20 public immutable buyToken;
-    address public immutable receiver;
+    IERC20 internal immutable _sellToken;
+    IERC20 internal immutable _buyToken;
+    address internal immutable _receiver;
     address public immutable orderOwner;
-    uint256 public immutable sellAmount;
-    uint256 public immutable buyAmount;
-    bytes32 public immutable appData;
-    uint256 public immutable feeAmount;
-    uint32 public immutable orderValidTo;
-    bool public immutable partiallyFillable;
-    int64 public immutable quoteId;
+    uint256 internal immutable _buyAmount;
+    bytes32 internal immutable _appData;
+    uint256 internal immutable _feeAmount;
+    uint32 internal immutable _orderValidTo;
+    bool internal immutable _partiallyFillable;
+    int64 internal immutable _quoteId;
 
     /// @dev The CoW Swap order hash, set when createOrder is called.
-    bytes32 public orderHash;
+    bytes32 internal _orderHash;
 
-    /// @dev Whether the order has been created.
-    bool public orderCreated;
+    /// @dev Owner state for EIP-1271 validation.
+    /// address(0) = order not yet created, orderOwner = active, INVALIDATED_OWNER = invalidated.
+    address internal _ownerState;
 
-    /// @dev Owner state for EIP-1271 validation. Mirrors EthFlowOrder.OnchainData semantics.
-    /// Set to orderOwner on creation, INVALIDATED_OWNER on invalidation.
-    address public ownerState;
-
-    /// @param _cowSwapSettlement The CoW Swap settlement contract.
-    /// @param _order The order data bound to this contract instance.
+    /// @param settlement The CoW Swap settlement contract.
+    /// @param order The order data bound to this contract instance.
     constructor(
-        ICoWSwapSettlement _cowSwapSettlement,
-        OrderFlowOrder.Data memory _order
-    ) CoWSwapOnchainOrders(address(_cowSwapSettlement)) {
-        cowSwapSettlement = _cowSwapSettlement;
+        ICoWSwapSettlement settlement,
+        OrderFlowOrder.Data memory order
+    ) CoWSwapOnchainOrders(address(settlement)) {
+        _cowSwapSettlement = settlement;
 
-        sellToken = _order.sellToken;
-        buyToken = _order.buyToken;
-        receiver = _order.receiver;
-        orderOwner = _order.owner;
-        sellAmount = _order.sellAmount;
-        buyAmount = _order.buyAmount;
-        appData = _order.appData;
-        feeAmount = _order.feeAmount;
-        orderValidTo = _order.validTo;
-        partiallyFillable = _order.partiallyFillable;
-        quoteId = _order.quoteId;
+        _sellToken = order.sellToken;
+        _buyToken = order.buyToken;
+        _receiver = order.receiver;
+        orderOwner = order.owner;
+        _buyAmount = order.buyAmount;
+        _appData = order.appData;
+        _feeAmount = order.feeAmount;
+        _orderValidTo = order.validTo;
+        _partiallyFillable = order.partiallyFillable;
+        _quoteId = order.quoteId;
 
-        _order.sellToken.approve(
-            _cowSwapSettlement.vaultRelayer(),
-            type(uint256).max
-        );
+        order.sellToken.approve(settlement.vaultRelayer(), type(uint256).max);
     }
 
     /// @inheritdoc IOrderFlow
     function createOrder() external returns (bytes32) {
-        if (orderCreated) {
+        if (_ownerState != address(0)) {
             revert OrderAlreadyCreated();
         }
 
-        if (sellToken.balanceOf(address(this)) < sellAmount + feeAmount) {
+        if (_sellToken.balanceOf(address(this)) < _feeAmount) {
             revert InsufficientBalance();
         }
 
@@ -92,43 +82,43 @@ contract OrderFlow is
             abi.encodePacked(address(this))
         );
 
-        bytes memory data = abi.encodePacked(quoteId, orderValidTo);
+        bytes memory data = abi.encodePacked(_quoteId, _orderValidTo);
 
-        orderHash = broadcastOrder(
+        _orderHash = broadcastOrder(
             orderOwner,
             order.toCoWSwapOrder(),
             signature,
             data
         );
 
-        ownerState = orderOwner;
-        orderCreated = true;
+        _ownerState = orderOwner;
 
-        return orderHash;
+        return _orderHash;
     }
 
     /// @inheritdoc IOrderFlow
     function invalidateOrder() external {
-        if (!orderCreated) {
-            revert NotAllowedToInvalidateOrder();
-        }
-        if (ownerState == OrderFlowOrder.INVALIDATED_OWNER) {
+        address currentOwner = _ownerState;
+        if (
+            currentOwner == address(0) ||
+            currentOwner == OrderFlowOrder.INVALIDATED_OWNER
+        ) {
             revert NotAllowedToInvalidateOrder();
         }
 
         // solhint-disable-next-line not-rely-on-time
-        bool isTradable = orderValidTo >= block.timestamp;
+        bool isTradable = _orderValidTo >= block.timestamp;
         if (isTradable && msg.sender != orderOwner) {
             revert NotAllowedToInvalidateOrder();
         }
 
-        ownerState = OrderFlowOrder.INVALIDATED_OWNER;
+        _ownerState = OrderFlowOrder.INVALIDATED_OWNER;
 
         GPv2Order.Data memory cowSwapOrder = _orderData().toCoWSwapOrder();
 
         bytes memory orderUid = new bytes(GPv2Order.UID_LENGTH);
         orderUid.packOrderUidParams(
-            orderHash,
+            _orderHash,
             address(this),
             cowSwapOrder.validTo
         );
@@ -140,7 +130,7 @@ contract OrderFlow is
             emit OrderRefund(orderUid, msg.sender);
         }
 
-        uint256 filledAmount = cowSwapSettlement.filledAmount(orderUid);
+        uint256 filledAmount = _cowSwapSettlement.filledAmount(orderUid);
 
         uint256 refundAmount;
         unchecked {
@@ -155,7 +145,7 @@ contract OrderFlow is
         }
 
         if (refundAmount > 0) {
-            bool success = sellToken.transfer(orderOwner, refundAmount);
+            bool success = _sellToken.transfer(orderOwner, refundAmount);
             if (!success) {
                 revert ERC20TransferFailed();
             }
@@ -163,18 +153,18 @@ contract OrderFlow is
     }
 
     /// @inheritdoc IOrderFlow
-    function isValidSignature(bytes32 _orderHash, bytes memory)
+    function isValidSignature(bytes32 orderHash, bytes memory)
         external
         view
         override(EIP1271Verifier, IOrderFlow)
         returns (bytes4)
     {
         if (
-            _orderHash == orderHash &&
-            ownerState != address(0) &&
-            ownerState != OrderFlowOrder.INVALIDATED_OWNER &&
+            orderHash == _orderHash &&
+            _ownerState != address(0) &&
+            _ownerState != OrderFlowOrder.INVALIDATED_OWNER &&
             // solhint-disable-next-line not-rely-on-time
-            orderValidTo >= block.timestamp
+            _orderValidTo >= block.timestamp
         ) {
             return GPv2EIP1271.MAGICVALUE;
         } else {
@@ -185,17 +175,17 @@ contract OrderFlow is
     /// @dev Reconstructs the OrderFlowOrder.Data struct from immutable storage.
     function _orderData() internal view returns (OrderFlowOrder.Data memory) {
         return OrderFlowOrder.Data({
-            sellToken: sellToken,
-            buyToken: buyToken,
-            receiver: receiver,
+            sellToken: _sellToken,
+            buyToken: _buyToken,
+            receiver: _receiver,
             owner: orderOwner,
-            sellAmount: sellAmount,
-            buyAmount: buyAmount,
-            appData: appData,
-            feeAmount: feeAmount,
-            validTo: orderValidTo,
-            partiallyFillable: partiallyFillable,
-            quoteId: quoteId
+            sellAmount: IERC20(_sellToken).balanceOf(address(this)),
+            buyAmount: _buyAmount,
+            appData: _appData,
+            feeAmount: _feeAmount,
+            validTo: _orderValidTo,
+            partiallyFillable: _partiallyFillable,
+            quoteId: _quoteId
         });
     }
 }
