@@ -11,6 +11,9 @@ importers:
       '@cowprotocol/cow-sdk':
         specifier: ^8.0.4
         version: 8.0.4(ajv@8.18.0)(cross-fetch@3.2.0)(ipfs-only-hash@4.0.0)(multiformats@9.9.0)
+      '@cowprotocol/sdk-viem-adapter':
+        specifier: ^0.3.14
+        version: 0.3.14(viem@2.47.6(typescript@6.0.2))
       dotenv:
         specifier: ^17.3.1
         version: 17.3.1
@@ -84,6 +87,11 @@ packages:
 
   '@cowprotocol/sdk-trading@1.2.0':
     resolution: {integrity: sha512-zAgpW98w/sWn+5LKb9VgOe+IwhqIO8ZiHerE3pZoQbSOy/JdbAIBWxqNtJi7e/D3JiKxzpR89J1PkmXSoY6nMg==}
+
+  '@cowprotocol/sdk-viem-adapter@0.3.14':
+    resolution: {integrity: sha512-6PVjU8W7DLKZ+A/nqmOh4NlbeMn5+XGaTrL7Npxt0y9wsWItvxctizrid+dWxn3jDoDG5yQaD2p95AyOOqxhfA==}
+    peerDependencies:
+      viem: ^2.28.4
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -790,6 +798,11 @@ snapshots:
       - encoding
       - ipfs-only-hash
       - multiformats
+
+  '@cowprotocol/sdk-viem-adapter@0.3.14(viem@2.47.6(typescript@6.0.2))':
+    dependencies:
+      '@cowprotocol/sdk-common': 0.8.2
+      viem: 2.47.6(typescript@6.0.2)
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:

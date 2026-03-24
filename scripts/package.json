@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@cowprotocol/cow-sdk": "^8.0.4",
+    "@cowprotocol/sdk-viem-adapter": "^0.3.14",
     "dotenv": "^17.3.1",
     "viem": "^2.47.6"
   }
