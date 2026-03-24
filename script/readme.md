@@ -1,0 +1,19 @@
+# Order creation
+
+## Usage
+
+Example bridging 1 USDC from Base to Arbitrum USDC and then swap to WETH, whatever amount.
+
+```sh
+PRIVATE_KEY=0x... \
+  FACTORY_ADDRESS=0xeEb5F87D9EA9bBf6D69a5bAbC0D8DFe8Dbd918Be \
+  SOURCE_TOKEN=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  DEST_TOKEN=0xaf88d065e77c8cc2239327c5edb3a432268e5831 \
+  BUY_TOKEN=0x82af49447d8a07e3bd95bd0d56f35241523fbab1 \
+  SOURCE_CHAIN_RPC_URL="$BASE_RPC_URL"\
+  SEND_AMOUNT=1000000 \
+  MIN_BUY_AMOUNT=1 \
+  SOURCE_CHAIN_ID=8453 \
+  DEST_CHAIN_ID=42161 \
+  node ./post-order.js
+```

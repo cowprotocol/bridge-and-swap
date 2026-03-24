@@ -27,18 +27,19 @@ const SEND_AMOUNT = required('SEND_AMOUNT');          // raw amount in source to
 const MIN_BUY_AMOUNT = required('MIN_BUY_AMOUNT');    // minimum buy token amount on dest chain (smallest unit)
 const SOURCE_CHAIN_ID = required('SOURCE_CHAIN_ID');
 const DEST_CHAIN_ID = required('DEST_CHAIN_ID');
+const SOURCE_CHAIN_RPC_URL = required('SOURCE_CHAIN_RPC_URL');
 
 const account = privateKeyToAccount(PRIVATE_KEY);
 
 const publicClient = createPublicClient({
   chain: { id: Number(SOURCE_CHAIN_ID) },
-  transport: http(),
+  transport: http(SOURCE_CHAIN_RPC_URL),
 });
 
 const walletClient = createWalletClient({
   account,
   chain: { id: Number(SOURCE_CHAIN_ID) },
-  transport: http(),
+  transport: http(SOURCE_CHAIN_RPC_URL),
 });
 
 const BUNGEE_API_BASE_URL = "https://public-backend.bungee.exchange";
@@ -255,8 +256,8 @@ async function main() {
   // Attach destination payload parameters to the quote request
   quoteParams.destinationPayload = destinationPayload;
   quoteParams.receiverAddress = FACTORY_ADDRESS;
-  // CREATE2 deploy + createOrder costs ~500k gas; add margin
-  quoteParams.destinationGasLimit = "700000";
+  // CREATE2 deploy + createOrder
+  quoteParams.destinationGasLimit = "1500000";
 
   console.log("\n1. Getting quote from Bungee...");
   const quote = await getQuote(quoteParams);
