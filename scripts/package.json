@@ -2,7 +2,9 @@
   "name": "scripts",
   "version": "0.0.0",
   "description": "Helper scripts to test the bridge and swap feature",
-  "scripts": {},
+  "scripts": {
+    "bridgeAndPrepareSwap": "ts-node src/bridgeAndPrepareSwap.ts"
+  },
   "keywords": [],
   "author": "",
   "license": "MIT or Apache-2.0",
