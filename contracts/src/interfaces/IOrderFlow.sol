@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 pragma solidity ^0.8;
 
-import "../libraries/OrderFlowOrder.sol";
-
 /// @title Order Flow Event Interface
 /// @author CoW Swap Developers
 interface IOrderFlowEvents {
@@ -15,40 +13,26 @@ interface IOrderFlowEvents {
 /// @title Order Flow Interface
 /// @author CoW Swap Developers
 interface IOrderFlow is IOrderFlowEvents {
-    /// @dev Error thrown when the contract does not hold enough uncommitted sell tokens for the order.
+    /// @dev Error thrown when trying to create an order on a contract that already has one.
+    error OrderAlreadyCreated();
+
+    /// @dev Error thrown when the contract does not hold enough sell tokens for the order.
     error InsufficientBalance();
 
-    /// @dev Error thrown when trying to create an order with a sell amount of zero.
-    error NotAllowedZeroSellAmount();
-
-    /// @dev Error thrown when trying to create an order that would be expired at the time of creation.
-    error OrderIsAlreadyExpired();
-
-    /// @dev Error thrown when the order hash collides with an existing order.
-    error OrderIsAlreadyOwned(bytes32 orderHash);
-
     /// @dev Error thrown if trying to invalidate an order while not allowed.
-    error NotAllowedToInvalidateOrder(bytes32 orderHash);
+    error NotAllowedToInvalidateOrder();
 
     /// @dev Error thrown when an ERC20 transfer fails.
     error ERC20TransferFailed();
 
-    /// @dev Creates and broadcasts an order flow order. The sell tokens must have been transferred to this contract
-    /// before calling this function (e.g., via a bridge). The contract tracks committed token amounts per sell token
-    /// so that multiple orders can coexist without double-counting the same tokens.
+    /// @dev Creates and broadcasts the order bound to this contract. The sell tokens must have been transferred
+    /// to this contract before calling this function. The order parameters are fixed at construction time.
     ///
-    /// @param order The data describing the order to be created.
     /// @return orderHash The hash of the CoW Swap order that is created.
-    function createOrder(OrderFlowOrder.Data calldata order)
-        external
-        returns (bytes32 orderHash);
+    function createOrder() external returns (bytes32 orderHash);
 
-    /// @dev Marks an existing order as invalid and refunds the sell tokens that haven't been traded yet.
-    /// Also releases the committed balance for this order, freeing capacity for new orders.
-    /// For fully-filled orders, this releases committed balance with a zero-amount refund.
-    ///
-    /// @param order Order to be invalidated.
-    function invalidateOrder(OrderFlowOrder.Data calldata order) external;
+    /// @dev Marks the order as invalid and refunds the sell tokens that haven't been traded yet.
+    function invalidateOrder() external;
 
     /// @dev EIP1271-compliant onchain signature verification function.
     ///

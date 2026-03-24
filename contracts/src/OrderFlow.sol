@@ -9,11 +9,11 @@ import "./vendored/GPv2EIP1271.sol";
 
 /// @title CoW Swap Order Flow
 /// @author CoW Swap Developers
-/// @dev A reusable contract that facilitates bridge-and-swap orders on CoW Protocol. One instance is deployed per
-/// owner. Multiple orders across different sell tokens can be created on the same instance. The contract tracks
-/// committed token balances per sell token to prevent double-counting across concurrent orders. Committed balance
-/// is released when orders are invalidated (including fully-filled orders with zero refund). Sell tokens are
-/// approved to the vault relayer on first use.
+/// @dev Each instance handles exactly one order whose parameters are fixed at construction time. The order data
+/// is embedded in the contract's constructor args, which means the CREATE2 address is uniquely determined by the
+/// order parameters — providing cryptographic verification that the contract is bound to specific order data.
+/// Tokens are expected to be pre-transferred to the counterfactual address (e.g., via a bridge) before
+/// deployment.
 contract OrderFlow is
     CoWSwapOnchainOrders,
     EIP1271Verifier,
@@ -26,99 +26,105 @@ contract OrderFlow is
     /// @dev The address of the CoW Swap settlement contract.
     ICoWSwapSettlement public immutable cowSwapSettlement;
 
-    /// @dev The address of the vault relayer that pulls tokens during settlement.
-    address public immutable vaultRelayerAddress;
+    /// @dev Order parameters stored as immutables (bound at construction).
+    IERC20 public immutable sellToken;
+    IERC20 public immutable buyToken;
+    address public immutable receiver;
+    address public immutable orderOwner;
+    uint256 public immutable sellAmount;
+    uint256 public immutable buyAmount;
+    bytes32 public immutable appData;
+    uint256 public immutable feeAmount;
+    uint32 public immutable orderValidTo;
+    bool public immutable partiallyFillable;
+    int64 public immutable quoteId;
 
-    /// @dev Per-token committed balance. Tracks the total amount of each sell token committed to active orders.
-    /// New orders can only be created if `token.balanceOf(this) >= committedBalances[token] + order amount`.
-    mapping(IERC20 => uint256) public committedBalances;
+    /// @dev The CoW Swap order hash, set when createOrder is called.
+    bytes32 public orderHash;
 
-    /// @dev Each order flow order can be converted to a CoW Swap order. This mapping associates extra data to a
-    /// specific CoW Swap order hash, used to verify ownership and validity.
-    mapping(bytes32 => OrderFlowOrder.OnchainData) public orders;
+    /// @dev Whether the order has been created.
+    bool public orderCreated;
+
+    /// @dev Owner state for EIP-1271 validation. Mirrors EthFlowOrder.OnchainData semantics.
+    /// Set to orderOwner on creation, INVALIDATED_OWNER on invalidation.
+    address public ownerState;
 
     /// @param _cowSwapSettlement The CoW Swap settlement contract.
+    /// @param _order The order data bound to this contract instance.
     constructor(
-        ICoWSwapSettlement _cowSwapSettlement
+        ICoWSwapSettlement _cowSwapSettlement,
+        OrderFlowOrder.Data memory _order
     ) CoWSwapOnchainOrders(address(_cowSwapSettlement)) {
         cowSwapSettlement = _cowSwapSettlement;
-        vaultRelayerAddress = _cowSwapSettlement.vaultRelayer();
+
+        sellToken = _order.sellToken;
+        buyToken = _order.buyToken;
+        receiver = _order.receiver;
+        orderOwner = _order.owner;
+        sellAmount = _order.sellAmount;
+        buyAmount = _order.buyAmount;
+        appData = _order.appData;
+        feeAmount = _order.feeAmount;
+        orderValidTo = _order.validTo;
+        partiallyFillable = _order.partiallyFillable;
+        quoteId = _order.quoteId;
+
+        _order.sellToken.approve(
+            _cowSwapSettlement.vaultRelayer(),
+            type(uint256).max
+        );
     }
 
     /// @inheritdoc IOrderFlow
-    function createOrder(OrderFlowOrder.Data calldata order)
-        external
-        returns (bytes32 orderHash)
-    {
-        if (order.sellAmount == 0) {
-            revert NotAllowedZeroSellAmount();
+    function createOrder() external returns (bytes32) {
+        if (orderCreated) {
+            revert OrderAlreadyCreated();
         }
 
-        // solhint-disable-next-line not-rely-on-time
-        if (order.validTo < block.timestamp) {
-            revert OrderIsAlreadyExpired();
-        }
-
-        IERC20 token = order.sellToken;
-        uint256 orderAmount = order.sellAmount + order.feeAmount;
-
-        if (token.balanceOf(address(this)) < committedBalances[token] + orderAmount) {
+        if (sellToken.balanceOf(address(this)) < sellAmount + feeAmount) {
             revert InsufficientBalance();
         }
 
-        // Approve sell token to vault relayer on first use.
-        if (token.allowance(address(this), vaultRelayerAddress) == 0) {
-            token.approve(vaultRelayerAddress, type(uint256).max);
-        }
-
-        OrderFlowOrder.OnchainData memory onchainData = OrderFlowOrder.OnchainData(
-            order.owner,
-            order.validTo
-        );
+        OrderFlowOrder.Data memory order = _orderData();
 
         OnchainSignature memory signature = OnchainSignature(
             OnchainSigningScheme.Eip1271,
             abi.encodePacked(address(this))
         );
 
-        bytes memory data = abi.encodePacked(
-            order.quoteId,
-            onchainData.validTo
-        );
+        bytes memory data = abi.encodePacked(quoteId, orderValidTo);
 
         orderHash = broadcastOrder(
-            onchainData.owner,
+            orderOwner,
             order.toCoWSwapOrder(),
             signature,
             data
         );
 
-        if (orders[orderHash].owner != OrderFlowOrder.NO_OWNER) {
-            revert OrderIsAlreadyOwned(orderHash);
-        }
+        ownerState = orderOwner;
+        orderCreated = true;
 
-        orders[orderHash] = onchainData;
-        committedBalances[token] += orderAmount;
+        return orderHash;
     }
 
     /// @inheritdoc IOrderFlow
-    function invalidateOrder(OrderFlowOrder.Data calldata order) external {
-        GPv2Order.Data memory cowSwapOrder = order.toCoWSwapOrder();
-        bytes32 orderHash = cowSwapOrder.hash(cowSwapDomainSeparator);
-
-        OrderFlowOrder.OnchainData memory orderData = orders[orderHash];
-
-        // solhint-disable-next-line not-rely-on-time
-        bool isTradable = orderData.validTo >= block.timestamp;
-        if (
-            orderData.owner == OrderFlowOrder.INVALIDATED_OWNER ||
-            orderData.owner == OrderFlowOrder.NO_OWNER ||
-            (isTradable && orderData.owner != msg.sender)
-        ) {
-            revert NotAllowedToInvalidateOrder(orderHash);
+    function invalidateOrder() external {
+        if (!orderCreated) {
+            revert NotAllowedToInvalidateOrder();
+        }
+        if (ownerState == OrderFlowOrder.INVALIDATED_OWNER) {
+            revert NotAllowedToInvalidateOrder();
         }
 
-        orders[orderHash].owner = OrderFlowOrder.INVALIDATED_OWNER;
+        // solhint-disable-next-line not-rely-on-time
+        bool isTradable = orderValidTo >= block.timestamp;
+        if (isTradable && msg.sender != orderOwner) {
+            revert NotAllowedToInvalidateOrder();
+        }
+
+        ownerState = OrderFlowOrder.INVALIDATED_OWNER;
+
+        GPv2Order.Data memory cowSwapOrder = _orderData().toCoWSwapOrder();
 
         bytes memory orderUid = new bytes(GPv2Order.UID_LENGTH);
         orderUid.packOrderUidParams(
@@ -148,11 +154,8 @@ contract OrderFlow is
                 feeRefundAmount;
         }
 
-        // Release the full committed amount for this order regardless of fill status.
-        committedBalances[order.sellToken] -= (cowSwapOrder.sellAmount + cowSwapOrder.feeAmount);
-
         if (refundAmount > 0) {
-            bool success = order.sellToken.transfer(orderData.owner, refundAmount);
+            bool success = sellToken.transfer(orderOwner, refundAmount);
             if (!success) {
                 revert ERC20TransferFailed();
             }
@@ -160,22 +163,39 @@ contract OrderFlow is
     }
 
     /// @inheritdoc IOrderFlow
-    function isValidSignature(bytes32 orderHash, bytes memory)
+    function isValidSignature(bytes32 _orderHash, bytes memory)
         external
         view
         override(EIP1271Verifier, IOrderFlow)
         returns (bytes4)
     {
-        OrderFlowOrder.OnchainData memory orderData = orders[orderHash];
         if (
-            (orderData.owner != OrderFlowOrder.NO_OWNER) &&
-            (orderData.owner != OrderFlowOrder.INVALIDATED_OWNER) &&
+            _orderHash == orderHash &&
+            ownerState != address(0) &&
+            ownerState != OrderFlowOrder.INVALIDATED_OWNER &&
             // solhint-disable-next-line not-rely-on-time
-            (orderData.validTo >= block.timestamp)
+            orderValidTo >= block.timestamp
         ) {
             return GPv2EIP1271.MAGICVALUE;
         } else {
             return bytes4(type(uint32).max);
         }
+    }
+
+    /// @dev Reconstructs the OrderFlowOrder.Data struct from immutable storage.
+    function _orderData() internal view returns (OrderFlowOrder.Data memory) {
+        return OrderFlowOrder.Data({
+            sellToken: sellToken,
+            buyToken: buyToken,
+            receiver: receiver,
+            owner: orderOwner,
+            sellAmount: sellAmount,
+            buyAmount: buyAmount,
+            appData: appData,
+            feeAmount: feeAmount,
+            validTo: orderValidTo,
+            partiallyFillable: partiallyFillable,
+            quoteId: quoteId
+        });
     }
 }

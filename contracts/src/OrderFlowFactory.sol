@@ -7,10 +7,11 @@ import "./interfaces/ICoWSwapSettlement.sol";
 
 /// @title CoW Swap Order Flow Factory
 /// @author CoW Swap Developers
-/// @dev Factory contract that deploys one OrderFlow instance per owner via CREATE2. Supports two entry points:
-/// 1. `triggerOrderCreation` — tokens are already at the OrderFlow address (direct/counterfactual flow).
-/// 2. `executeData` (IBungeeExecutor) — Bungee delivers tokens to this factory, which forwards them to
-///    the OrderFlow address before creating the order.
+/// @dev Factory contract that deploys one OrderFlow instance per order via CREATE2. The order data is passed as
+/// a constructor argument, so the CREATE2 address is uniquely determined by the order parameters — providing
+/// cryptographic proof that a given address corresponds to specific order data. Supports two entry points:
+/// 1. `triggerOrderCreation` — tokens are already at the counterfactual address (direct flow).
+/// 2. `executeData` (IBungeeExecutor) — Bungee delivers tokens to this factory, which forwards them.
 contract OrderFlowFactory is IOrderFlowFactory {
     /// @dev The CoW Swap settlement contract used by all deployed OrderFlow instances.
     ICoWSwapSettlement public immutable cowSwapSettlement;
@@ -47,7 +48,7 @@ contract OrderFlowFactory is IOrderFlowFactory {
             revert BungeeAmountInsufficient();
         }
 
-        address orderFlow = getOrderFlowAddress(order.owner);
+        address orderFlow = _getOrderFlowAddress(order);
 
         bool success = IERC20(tokens[0]).transfer(orderFlow, amounts[0]);
         if (!success) {
@@ -58,16 +59,24 @@ contract OrderFlowFactory is IOrderFlowFactory {
     }
 
     /// @inheritdoc IOrderFlowFactory
-    function getOrderFlowAddress(address owner)
-        public
+    function getOrderFlowAddress(OrderFlowOrder.Data calldata order)
+        external
         view
         returns (address)
     {
-        bytes32 salt = _computeDeploySalt(owner);
+        return _getOrderFlowAddress(order);
+    }
+
+    /// @dev Internal: computes the deterministic address for an order.
+    function _getOrderFlowAddress(OrderFlowOrder.Data memory order)
+        internal
+        view
+        returns (address)
+    {
         bytes32 initCodeHash = keccak256(
             abi.encodePacked(
                 type(OrderFlow).creationCode,
-                abi.encode(cowSwapSettlement)
+                abi.encode(cowSwapSettlement, order)
             )
         );
 
@@ -78,7 +87,7 @@ contract OrderFlowFactory is IOrderFlowFactory {
                         abi.encodePacked(
                             bytes1(0xff),
                             address(this),
-                            salt,
+                            bytes32(0),
                             initCodeHash
                         )
                     )
@@ -87,25 +96,17 @@ contract OrderFlowFactory is IOrderFlowFactory {
         );
     }
 
-    /// @dev Internal logic shared by triggerOrderCreation and executeData.
-    /// Deploys an OrderFlow contract if one doesn't exist for the owner, then creates the order.
+    /// @dev Internal: deploys an OrderFlow contract and creates the order.
     function _triggerOrderCreation(OrderFlowOrder.Data memory order)
         internal
         returns (address orderFlow, bytes32 orderHash)
     {
-        orderFlow = getOrderFlowAddress(order.owner);
+        OrderFlow instance = new OrderFlow{salt: bytes32(0)}(
+            cowSwapSettlement,
+            order
+        );
 
-        if (orderFlow.code.length == 0) {
-            bytes32 salt = _computeDeploySalt(order.owner);
-            OrderFlow instance = new OrderFlow{salt: salt}(cowSwapSettlement);
-            assert(address(instance) == orderFlow);
-        }
-
-        orderHash = OrderFlow(orderFlow).createOrder(order);
-    }
-
-    /// @dev Computes the CREATE2 salt from the owner address. One OrderFlow per owner.
-    function _computeDeploySalt(address owner) internal pure returns (bytes32) {
-        return keccak256(abi.encode(owner));
+        orderFlow = address(instance);
+        orderHash = instance.createOrder();
     }
 }
