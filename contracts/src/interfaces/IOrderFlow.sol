@@ -1,46 +1,60 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 pragma solidity ^0.8;
 
-/// @title Order Flow Event Interface
+import "../libraries/OrderFlowOrder.sol";
+import "./IBungeeExecutor.sol";
+import "./IWrappedNativeToken.sol";
+
+/// @title Order Flow Factory Interface
 /// @author CoW Swap Developers
-interface IOrderFlowEvents {
-    /// @dev Event emitted to notify that an order was refunded.
-    /// @param orderUid CoW Swap's unique order identifier of the order that has been invalidated (and refunded).
-    /// @param refunder The address that triggered the order refund.
-    event OrderRefund(bytes orderUid, address indexed refunder);
-}
+interface IOrderFlowFactory is IBungeeExecutor {
+    /// @dev Error thrown when the Bungee payload contains no tokens.
+    error BungeeNoTokens();
 
-/// @title Order Flow Interface
-/// @author CoW Swap Developers
-interface IOrderFlow is IOrderFlowEvents {
-    /// @dev Error thrown when trying to create an order on a contract that already has one.
-    error OrderAlreadyCreated();
+    /// @dev Error thrown when the Bungee token does not match the order's sell token.
+    error BungeeTokenMismatch();
 
-    /// @dev Error thrown when the contract does not hold enough sell tokens for the order.
-    error InsufficientBalance();
+    /// @dev Error thrown when the Bungee amount is less than the order requires.
+    error BungeeAmountInsufficient();
 
-    /// @dev Error thrown if trying to invalidate an order while not allowed.
-    error NotAllowedToInvalidateOrder();
+    /// @dev Error thrown when the ERC20 transfer from factory to OrderFlow fails.
+    error TokenTransferFailed();
 
-    /// @dev Error thrown when an ERC20 transfer fails.
-    error ERC20TransferFailed();
+    /// @dev Error thrown when the order's sell token does not match the supplied wrapped native token.
+    error NativeTokenMismatch();
 
-    /// @dev Creates and broadcasts the order bound to this contract. The sell tokens must have been transferred
-    /// to this contract before calling this function. The order parameters are fixed at construction time.
+    /// @dev Deploys an OrderFlow contract via CREATE2 and creates the order.
+    /// The sell tokens must already be at the counterfactual address before calling this function.
+    /// Each order gets its own contract — the order data is bound to the contract via constructor args.
     ///
-    /// @return orderHash The hash of the CoW Swap order that is created.
-    function createOrder() external returns (bytes32 orderHash);
+    /// @param order The order data describing the order to be created.
+    /// @return orderFlow The address of the deployed OrderFlow contract.
+    /// @return orderHash The hash of the CoW Swap order that was created.
+    function triggerOrderCreation(OrderFlowOrder.Data calldata order)
+        external
+        returns (address orderFlow, bytes32 orderHash);
 
-    /// @dev Marks the order as invalid and refunds the sell tokens that haven't been traded yet.
-    function invalidateOrder() external;
-
-    /// @dev EIP1271-compliant onchain signature verification function.
+    /// @dev Wraps native tokens and creates an order selling the wrapped token, replicating EthFlow behaviour
+    /// on any EVM chain. The caller sends native tokens as `msg.value`; the factory wraps them into
+    /// `wrappedNativeToken` (e.g. WETH, WMATIC) and forwards them to the counterfactual OrderFlow address
+    /// before deploying and creating the order. `order.sellToken` must equal `wrappedNativeToken`.
     ///
-    /// @param orderHash Hash of the order to be signed.
-    /// @param signature Signature byte array (unused, all info is onchain).
-    /// @return magicValue Either the EIP-1271 "magic value" (0x1626ba7e) or 0xffffffff.
-    function isValidSignature(bytes32 orderHash, bytes memory signature)
+    /// @param order The order data. `sellToken` must be `wrappedNativeToken`.
+    /// @param wrappedNativeToken The wrapped native token contract for the current chain.
+    /// @return orderFlow The address of the deployed OrderFlow contract.
+    /// @return orderHash The hash of the CoW Swap order that was created.
+    function triggerNativeOrderCreation(
+        OrderFlowOrder.Data calldata order,
+        IWrappedNativeToken wrappedNativeToken
+    ) external payable returns (address orderFlow, bytes32 orderHash);
+
+    /// @dev Computes the deterministic address of an OrderFlow contract for a given order.
+    /// The address is uniquely determined by the order parameters since they are constructor args.
+    ///
+    /// @param order The order data.
+    /// @return The address where the OrderFlow contract would be deployed.
+    function getOrderFlowAddress(OrderFlowOrder.Data calldata order)
         external
         view
-        returns (bytes4 magicValue);
+        returns (address);
 }

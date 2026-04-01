@@ -28,6 +28,9 @@ library OrderFlowOrder {
         /// In the bridge-and-swap flow, this is set by the source chain initiator since msg.sender on the
         /// destination chain is the factory contract.
         address owner;
+        /// @dev The minimum amount of sellToken required to initialize the order. This is *NOT* the sellAmount used in the final CoW order (the actual amount of tokens in the contract is)
+        /// This is used to prevent front-running of the order creation transaction. The contract creation will fail if insufficient funds are found.
+        uint256 minSellAmount;
         /// @dev The minimum amount of buyToken that should be received to settle this order.
         uint256 buyAmount;
         /// @dev Extra data to include in the order. It is used by the CoW Swap infrastructure as extra information on
@@ -75,7 +78,7 @@ library OrderFlowOrder {
                 order.receiver, // address receiver
                 sellAmount, // uint256 sellAmount
                 order.buyAmount, // uint256 buyAmount
-                type(uint32).max, // uint32 validTo - never expires on-chain; real expiry via isValidSignature
+                order.validTo,
                 order.appData, // bytes32 appData
                 order.feeAmount, // uint256 feeAmount
                 GPv2Order.KIND_SELL, // bytes32 kind
