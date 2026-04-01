@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 pragma solidity ^0.8;
 
-import "../vendored/IERC20.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 /// @title CoW Swap Wrapped Native Token Interface
 /// @author CoW Swap Developers

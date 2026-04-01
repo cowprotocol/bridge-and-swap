@@ -3,14 +3,15 @@ pragma solidity ^0.8;
 
 import {Test, Vm} from "forge-std/Test.sol";
 import {OrderFlow} from "../src/OrderFlow.sol";
-import {OrderFlowFactory} from "../src/OrderFlowFactory.sol";
+import {OrderFlowWithBungee} from "../src/OrderFlowWithBungee.sol";
+import {OrderFlowSender} from "../src/OrderFlowSender.sol";
 import {OrderFlowOrder} from "../src/libraries/OrderFlowOrder.sol";
 import {IOrderFlow} from "../src/interfaces/IOrderFlow.sol";
-import {IOrderFlowFactory} from "../src/interfaces/IOrderFlowFactory.sol";
+import {IOrderFlowSender} from "../src/interfaces/IOrderFlowSender.sol";
 import {ICoWSwapSettlement} from "../src/interfaces/ICoWSwapSettlement.sol";
 import {GPv2Order} from "../src/vendored/GPv2Order.sol";
 import {GPv2EIP1271} from "../src/vendored/GPv2EIP1271.sol";
-import {IERC20} from "../src/vendored/IERC20.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 contract MockSettlement is ICoWSwapSettlement {
     address public immutable vaultRelayerAddress;
@@ -72,14 +73,6 @@ contract MockERC20 is IERC20 {
     }
 }
 
-/// @dev Test harness that exposes OrderFlow internals for testing.
-contract OrderFlowHarness is OrderFlow {
-    constructor(ICoWSwapSettlement s, OrderFlowOrder.Data memory o) OrderFlow(s, o) {}
-
-    function orderHash() external view returns (bytes32) { return _orderHash; }
-    function ownerState() external view returns (address) { return _ownerState; }
-}
-
 contract OrderFlowTest is Test {
     using OrderFlowOrder for OrderFlowOrder.Data;
     using GPv2Order for GPv2Order.Data;
@@ -88,12 +81,12 @@ contract OrderFlowTest is Test {
     MockSettlement public settlement;
     MockERC20 public tokenA;
     MockERC20 public buyToken;
-    OrderFlowFactory public factory;
+    // OrderFlowWithBungee used as factory so executeData tests work without a separate contract.
+    OrderFlowWithBungee public factory;
     address public vaultRelayer;
     address public owner;
     address public receiver;
 
-    // Default funding: 1 ether sell + 0.01 ether fee
     uint256 constant DEFAULT_SELL = 1 ether;
     uint256 constant DEFAULT_FEE = 0.01 ether;
     uint256 constant DEFAULT_FUND = DEFAULT_SELL + DEFAULT_FEE;
@@ -106,7 +99,7 @@ contract OrderFlowTest is Test {
         settlement = new MockSettlement(vaultRelayer);
         tokenA = new MockERC20();
         buyToken = new MockERC20();
-        factory = new OrderFlowFactory(ICoWSwapSettlement(address(settlement)));
+        factory = new OrderFlowWithBungee(ICoWSwapSettlement(address(settlement)));
     }
 
     function _defaultOrder() internal view returns (OrderFlowOrder.Data memory) {
@@ -115,6 +108,7 @@ contract OrderFlowTest is Test {
             buyToken: IERC20(address(buyToken)),
             receiver: receiver,
             owner: owner,
+            minSellAmount: DEFAULT_SELL,
             buyAmount: 2000e6,
             appData: bytes32(uint256(1)),
             feeAmount: DEFAULT_FEE,
@@ -125,7 +119,7 @@ contract OrderFlowTest is Test {
     }
 
     function _fundCounterfactualAddress(OrderFlowOrder.Data memory order, uint256 amount) internal returns (address) {
-        address predicted = factory.getOrderFlowAddress(order);
+        address predicted = factory.getOrderAddress(order);
         tokenA.mint(predicted, amount);
         return predicted;
     }
@@ -134,41 +128,35 @@ contract OrderFlowTest is Test {
         return _fundCounterfactualAddress(order, DEFAULT_FUND);
     }
 
-    function _deployHarness(OrderFlowOrder.Data memory order) internal returns (OrderFlowHarness) {
-        OrderFlowHarness h = new OrderFlowHarness(ICoWSwapSettlement(address(settlement)), order);
-        tokenA.mint(address(h), DEFAULT_FUND);
-        return h;
-    }
-
     // ============================================================
     // Factory Tests
     // ============================================================
 
-    function test_getOrderFlowAddress_deterministic() public view {
+    function test_getOrderAddress_deterministic() public view {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        assertEq(factory.getOrderFlowAddress(order), factory.getOrderFlowAddress(order));
+        assertEq(factory.getOrderAddress(order), factory.getOrderAddress(order));
     }
 
-    function test_getOrderFlowAddress_differentForDifferentOrders() public view {
+    function test_getOrderAddress_differentForDifferentOrders() public view {
         OrderFlowOrder.Data memory order1 = _defaultOrder();
         OrderFlowOrder.Data memory order2 = _defaultOrder();
         order2.buyAmount = 9999e6;
-        assertTrue(factory.getOrderFlowAddress(order1) != factory.getOrderFlowAddress(order2));
+        assertTrue(factory.getOrderAddress(order1) != factory.getOrderAddress(order2));
     }
 
-    function test_triggerOrderCreation_deploysAtPredictedAddress() public {
+    function test_placeOrder_deploysAtPredictedAddress() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         address predicted = _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
+        (address deployed,) = factory.placeOrder(order);
         assertEq(deployed, predicted);
     }
 
-    function test_triggerOrderCreation_emitsOrderPlacement() public {
+    function test_placeOrder_emitsOrderPlacement() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
 
         vm.recordLogs();
-        factory.triggerOrderCreation(order);
+        factory.placeOrder(order);
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 topic = keccak256(
@@ -181,192 +169,147 @@ contract OrderFlowTest is Test {
         assertTrue(found);
     }
 
-    function test_triggerOrderCreation_revertsIfInsufficientBalance() public {
+    function test_placeOrder_revertsIfInsufficientBalance() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        vm.expectRevert(IOrderFlow.InsufficientBalance.selector);
-        factory.triggerOrderCreation(order);
+        // Fund less than minSellAmount + feeAmount
+        _fundCounterfactualAddress(order, DEFAULT_FEE - 1);
+        vm.expectRevert(abi.encodeWithSelector(IOrderFlowSender.InsufficientBalance.selector, 0, DEFAULT_SELL));
+        factory.placeOrder(order);
     }
 
-    function test_triggerOrderCreation_revertsIfSameOrderTwice() public {
+    function test_placeOrder_revertsIfSameOrderTwice() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        factory.triggerOrderCreation(order);
+        factory.placeOrder(order);
 
         vm.expectRevert();
-        factory.triggerOrderCreation(order);
+        factory.placeOrder(order);
     }
 
     // ============================================================
-    // OrderFlow - Constructor
+    // OrderFlowSender - State after placeOrder
     // ============================================================
 
-    function test_constructor_approvesVaultRelayer() public {
+    function test_placeOrder_approvesVaultRelayer() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-        assertEq(tokenA.allowance(deployed, vaultRelayer), type(uint256).max);
+        (address deployed,) = factory.placeOrder(order);
+        assertEq(tokenA.allowance(deployed, vaultRelayer), DEFAULT_FUND);
     }
 
-    // ============================================================
-    // OrderFlow - createOrder Tests
-    // ============================================================
-
-    function test_createOrder_setsState() public {
+    function test_placeOrder_setsOrderHash() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlowHarness h = _deployHarness(order);
-        bytes32 oHash = h.createOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed, bytes32 oHash) = factory.placeOrder(order);
 
-        assertEq(h.orderHash(), oHash);
+        assertEq(OrderFlowSender(deployed).orderHash(), oHash);
         assertTrue(oHash != bytes32(0));
-        assertEq(h.ownerState(), owner);
     }
 
-    function test_createOrder_revertsIfCalledTwice() public {
+    function test_placeOrder_setsOwner() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-
-        vm.expectRevert(IOrderFlow.OrderAlreadyCreated.selector);
-        OrderFlow(deployed).createOrder();
+        (address deployed,) = factory.placeOrder(order);
+        assertEq(OrderFlowSender(deployed).orderOwner(), owner);
     }
 
-    function test_createOrder_revertsIfInsufficientBalance() public {
+    function test_placeOrder_setsValidTo() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-        // Fund less than fee
-        tokenA.mint(address(flow), DEFAULT_FEE - 1);
-
-        vm.expectRevert(IOrderFlow.InsufficientBalance.selector);
-        flow.createOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed,) = factory.placeOrder(order);
+        assertEq(OrderFlowSender(deployed).orderValidTo(), order.validTo);
     }
 
-    function test_createOrder_revertsIfReceiverNotSet() public {
+    function test_placeOrder_revertsIfReceiverNotSet() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         order.receiver = address(0);
         _fundCounterfactualAddress(order);
 
         vm.expectRevert(OrderFlowOrder.ReceiverMustBeSet.selector);
-        factory.triggerOrderCreation(order);
+        factory.placeOrder(order);
     }
 
     // ============================================================
-    // OrderFlow - isValidSignature Tests
+    // OrderFlowSender - isValidSignature
     // ============================================================
 
     function test_isValidSignature_validOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
-        assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), GPv2EIP1271.MAGICVALUE);
+        (address deployed, bytes32 oHash) = factory.placeOrder(order);
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
     }
 
     function test_isValidSignature_expiredOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
+        (address deployed, bytes32 oHash) = factory.placeOrder(order);
 
         vm.warp(order.validTo + 1);
-        assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), bytes4(type(uint32).max));
-    }
-
-    function test_isValidSignature_invalidatedOrder() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        _fundCounterfactualAddress(order);
-        (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
-
-        vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
-        assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), bytes4(type(uint32).max));
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), bytes4(type(uint32).max));
     }
 
     function test_isValidSignature_wrongHash() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-        assertEq(OrderFlow(deployed).isValidSignature(bytes32(uint256(999)), ""), bytes4(type(uint32).max));
-    }
-
-    function test_isValidSignature_beforeCreateOrder() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-        assertEq(flow.isValidSignature(bytes32(uint256(1)), ""), bytes4(type(uint32).max));
+        (address deployed,) = factory.placeOrder(order);
+        assertEq(OrderFlowSender(deployed).isValidSignature(bytes32(uint256(999)), ""), bytes4(type(uint32).max));
     }
 
     // ============================================================
-    // OrderFlow - invalidateOrder Tests
+    // OrderFlowSender - returnTokens
     // ============================================================
 
-    function test_invalidateOrder_ownerCanInvalidateValidOrder() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlowHarness h = _deployHarness(order);
-        h.createOrder();
-
-        vm.prank(owner);
-        h.invalidateOrder();
-        assertEq(h.ownerState(), OrderFlowOrder.INVALIDATED_OWNER);
-    }
-
-    function test_invalidateOrder_anyoneCanRefundExpiredOrder() public {
+    function test_returnTokens_ownerCanReturnValidOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-
-        vm.warp(order.validTo + 1);
-        vm.prank(makeAddr("anyone"));
-        OrderFlow(deployed).invalidateOrder();
-    }
-
-    function test_invalidateOrder_revertsIfNotOwnerAndNotExpired() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-
-        vm.prank(makeAddr("notOwner"));
-        vm.expectRevert(IOrderFlow.NotAllowedToInvalidateOrder.selector);
-        OrderFlow(deployed).invalidateOrder();
-    }
-
-    function test_invalidateOrder_revertsIfAlreadyInvalidated() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
-
-        vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
-
-        vm.prank(owner);
-        vm.expectRevert(IOrderFlow.NotAllowedToInvalidateOrder.selector);
-        OrderFlow(deployed).invalidateOrder();
-    }
-
-    function test_invalidateOrder_revertsIfNotCreated() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-
-        vm.expectRevert(IOrderFlow.NotAllowedToInvalidateOrder.selector);
-        flow.invalidateOrder();
-    }
-
-    function test_invalidateOrder_refundsFullAmountWhenUnfilled() public {
-        OrderFlowOrder.Data memory order = _defaultOrder();
-        _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
+        (address deployed,) = factory.placeOrder(order);
 
         uint256 ownerBefore = tokenA.balanceOf(owner);
         vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
-        // Refund = sellAmount + feeAmount = entire balance
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
         assertEq(tokenA.balanceOf(owner) - ownerBefore, DEFAULT_FUND);
     }
 
-    function test_invalidateOrder_emitsOrderInvalidationForValidOrder() public {
+    function test_returnTokens_anyoneCanRefundExpiredOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
+        (address deployed,) = factory.placeOrder(order);
+
+        vm.warp(order.validTo + 1);
+        vm.prank(makeAddr("anyone"));
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
+    }
+
+    function test_returnTokens_revertsIfNotOwnerAndNotExpired() public {
+        OrderFlowOrder.Data memory order = _defaultOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed,) = factory.placeOrder(order);
+
+        vm.prank(makeAddr("notOwner"));
+        vm.expectRevert(IOrderFlowSender.NotAllowedToInvalidateOrder.selector);
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
+    }
+
+    function test_returnTokens_refundsFullAmountWhenUnfilled() public {
+        OrderFlowOrder.Data memory order = _defaultOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed,) = factory.placeOrder(order);
+
+        uint256 ownerBefore = tokenA.balanceOf(owner);
+        vm.prank(owner);
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
+        assertEq(tokenA.balanceOf(owner) - ownerBefore, DEFAULT_FUND);
+    }
+
+    function test_returnTokens_emitsOrderInvalidationForValidOrder() public {
+        OrderFlowOrder.Data memory order = _defaultOrder();
+        _fundCounterfactualAddress(order);
+        (address deployed,) = factory.placeOrder(order);
 
         vm.recordLogs();
         vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 topic = keccak256("OrderInvalidation(bytes)");
@@ -377,16 +320,16 @@ contract OrderFlowTest is Test {
         assertTrue(found);
     }
 
-    function test_invalidateOrder_emitsOrderRefundForExpiredOrder() public {
+    function test_returnTokens_emitsOrderRefundForExpiredOrder() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
         _fundCounterfactualAddress(order);
-        (address deployed,) = factory.triggerOrderCreation(order);
+        (address deployed,) = factory.placeOrder(order);
 
         vm.warp(order.validTo + 1);
 
         vm.recordLogs();
         vm.prank(owner);
-        OrderFlow(deployed).invalidateOrder();
+        OrderFlowSender(deployed).returnTokens(IERC20(address(tokenA)));
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 topic = keccak256("OrderRefund(bytes,address)");
@@ -398,7 +341,7 @@ contract OrderFlowTest is Test {
     }
 
     // ============================================================
-    // OrderFlowOrder Library Tests
+    // OrderFlowOrder Library
     // ============================================================
 
     function test_toCoWSwapOrder_correctMapping() public view {
@@ -427,41 +370,43 @@ contract OrderFlowTest is Test {
     function test_fullCounterfactualFlow() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
 
-        address predicted = factory.getOrderFlowAddress(order);
+        address predicted = factory.getOrderAddress(order);
         assertEq(predicted.code.length, 0);
 
         tokenA.mint(predicted, DEFAULT_FUND);
 
-        (address deployed, bytes32 orderHash) = factory.triggerOrderCreation(order);
+        (address deployed, bytes32 oHash) = factory.placeOrder(order);
         assertEq(deployed, predicted);
         assertTrue(deployed.code.length > 0);
 
-        assertEq(OrderFlow(deployed).isValidSignature(orderHash, ""), GPv2EIP1271.MAGICVALUE);
-        assertEq(tokenA.allowance(deployed, vaultRelayer), type(uint256).max);
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
+        assertEq(tokenA.allowance(deployed, vaultRelayer), DEFAULT_FUND);
     }
 
     function test_addressChangesWithAnyFieldChange() public view {
         OrderFlowOrder.Data memory base = _defaultOrder();
-        address baseAddr = factory.getOrderFlowAddress(base);
+        address baseAddr = factory.getOrderAddress(base);
 
         OrderFlowOrder.Data memory m;
 
         m = _defaultOrder(); m.buyAmount = 999;
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "buyAmount");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "buyAmount");
         m = _defaultOrder(); m.receiver = address(1);
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "receiver");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "receiver");
         m = _defaultOrder(); m.owner = address(1);
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "owner");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "owner");
         m = _defaultOrder(); m.feeAmount = 999;
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "feeAmount");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "feeAmount");
         m = _defaultOrder(); m.validTo = uint32(block.timestamp + 2 hours);
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "validTo");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "validTo");
         m = _defaultOrder(); m.partiallyFillable = true;
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "partiallyFillable");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "partiallyFillable");
         m = _defaultOrder(); m.quoteId = 999;
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "quoteId");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "quoteId");
         m = _defaultOrder(); m.appData = bytes32(uint256(999));
-        assertTrue(factory.getOrderFlowAddress(m) != baseAddr, "appData");
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "appData");
+        m = _defaultOrder(); m.minSellAmount = 999;
+        assertTrue(factory.getOrderAddress(m) != baseAddr, "minSellAmount");
     }
 
     // ============================================================
@@ -495,13 +440,13 @@ contract OrderFlowTest is Test {
             _encodeBungeeCallData(order)
         );
 
-        address orderFlow = factory.getOrderFlowAddress(order);
+        address orderFlow = factory.getOrderAddress(order);
         assertTrue(orderFlow.code.length > 0);
     }
 
     function test_executeData_revertsIfNoTokens() public {
         OrderFlowOrder.Data memory order = _defaultOrder();
-        vm.expectRevert(IOrderFlowFactory.BungeeNoTokens.selector);
+        vm.expectRevert(OrderFlowWithBungee.BungeeNoTokens.selector);
         factory.executeData(bytes32(0), new uint256[](0), new address[](0), _encodeBungeeCallData(order));
     }
 
@@ -510,7 +455,7 @@ contract OrderFlowTest is Test {
         MockERC20 wrongToken = new MockERC20();
         wrongToken.mint(address(factory), DEFAULT_FUND);
 
-        vm.expectRevert(IOrderFlowFactory.BungeeTokenMismatch.selector);
+        vm.expectRevert(OrderFlowWithBungee.BungeeTokenMismatch.selector);
         factory.executeData(
             bytes32(0),
             _bungeeAmounts(DEFAULT_FUND),
@@ -524,7 +469,7 @@ contract OrderFlowTest is Test {
         uint256 tooLow = order.feeAmount - 1;
         tokenA.mint(address(factory), tooLow);
 
-        vm.expectRevert(IOrderFlowFactory.BungeeAmountInsufficient.selector);
+        vm.expectRevert(OrderFlowWithBungee.BungeeAmountInsufficient.selector);
         factory.executeData(
             bytes32(0),
             _bungeeAmounts(tooLow),
@@ -545,7 +490,7 @@ contract OrderFlowTest is Test {
             _encodeBungeeCallData(order)
         );
 
-        address orderFlow = factory.getOrderFlowAddress(order);
+        address orderFlow = factory.getOrderAddress(order);
         assertEq(tokenA.balanceOf(orderFlow), total);
         assertEq(tokenA.balanceOf(address(factory)), 0);
     }
@@ -564,11 +509,11 @@ contract OrderFlowTest is Test {
         // Order 2 via direct flow (different order data = different contract)
         OrderFlowOrder.Data memory order2 = _defaultOrder();
         order2.buyAmount = 5000e6;
-        address predicted2 = factory.getOrderFlowAddress(order2);
+        address predicted2 = factory.getOrderAddress(order2);
         tokenA.mint(predicted2, DEFAULT_FUND);
-        factory.triggerOrderCreation(order2);
+        factory.placeOrder(order2);
 
-        address flow1 = factory.getOrderFlowAddress(order1);
+        address flow1 = factory.getOrderAddress(order1);
         assertTrue(flow1 != predicted2);
         assertTrue(flow1.code.length > 0);
         assertTrue(predicted2.code.length > 0);
@@ -578,19 +523,22 @@ contract OrderFlowTest is Test {
     // Fuzz Tests
     // ============================================================
 
-    function testFuzz_createOrder_balanceCheck(uint256 feeAmt, uint256 balance) public {
-        feeAmt = bound(feeAmt, 1, type(uint128).max);
-        balance = bound(balance, 0, feeAmt);
+    function testFuzz_placeOrder_balanceCheck(uint256 minSell, uint256 fee, uint256 balance) public {
+        minSell = bound(minSell, 1, type(uint64).max);
+        fee = bound(fee, 1, type(uint64).max);
+        balance = bound(balance, 0, minSell + fee);
 
         OrderFlowOrder.Data memory order = _defaultOrder();
-        order.feeAmount = feeAmt;
+        order.minSellAmount = minSell;
+        order.feeAmount = fee;
 
-        OrderFlow flow = new OrderFlow(ICoWSwapSettlement(address(settlement)), order);
-        tokenA.mint(address(flow), balance);
+        address predicted = factory.getOrderAddress(order);
+        tokenA.mint(predicted, balance);
 
-        if (balance < feeAmt) {
-            vm.expectRevert(IOrderFlow.InsufficientBalance.selector);
+        bool shouldPass = balance > fee && (balance - fee) >= minSell;
+        if (!shouldPass) {
+            vm.expectRevert();
         }
-        flow.createOrder();
+        factory.placeOrder(order);
     }
 }

@@ -2,7 +2,7 @@
 pragma solidity ^0.8;
 
 import "../vendored/GPv2Order.sol";
-import "../vendored/IERC20.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 /// @title CoW Swap Order Flow Order Library
 /// @author CoW Swap Developers
@@ -78,7 +78,7 @@ library OrderFlowOrder {
                 order.receiver, // address receiver
                 sellAmount, // uint256 sellAmount
                 order.buyAmount, // uint256 buyAmount
-                order.validTo,
+                type(uint32).max, // validTo: expiry enforced by isValidSignature, not settlement
                 order.appData, // bytes32 appData
                 order.feeAmount, // uint256 feeAmount
                 GPv2Order.KIND_SELL, // bytes32 kind
