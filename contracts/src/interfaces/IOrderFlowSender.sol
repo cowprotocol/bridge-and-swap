@@ -63,4 +63,7 @@ interface IOrderFlowSender is IOrderFlowSenderEvents {
         external
         view
         returns (bytes4 magicValue);
+
+    /// @dev Noop function. Retained for compatibility with original EthFlow contract for the backend.
+    function wrapAll() external pure;
 }

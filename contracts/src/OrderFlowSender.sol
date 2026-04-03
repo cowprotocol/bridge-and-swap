@@ -141,4 +141,9 @@ contract OrderFlowSender is CoWSwapOnchainOrders, EIP1271Verifier, IOrderFlowSen
             return bytes4(type(uint32).max);
         }
     }
+
+    /// @inheritdoc IOrderFlowSender
+    function wrapAll() external pure override {
+        // do nothing
+    }
 }

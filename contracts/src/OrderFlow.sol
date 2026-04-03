@@ -96,8 +96,8 @@ contract OrderFlow is IOrderFlow, CoWSwapOnchainOrders {
         );
 
         // Compute the sell amount: total balance minus the fee.
-        // The counterfactual address must be pre-funded before this call.
-        uint256 balance = order.sellToken.balanceOf(address(sender));
+        // Include the clone's native balance because setupOrder will wrap it to the sell token.
+        uint256 balance = order.sellToken.balanceOf(address(sender)) + address(sender).balance;
         uint256 sellAmount = balance > order.feeAmount ? balance - order.feeAmount : 0;
 
         GPv2Order.Data memory cowOrder = order.toCoWSwapOrder(sellAmount);

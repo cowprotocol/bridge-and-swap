@@ -73,6 +73,15 @@ contract MockERC20 is IERC20 {
     }
 }
 
+/// @dev Minimal WETH-like token: accepts ETH via fallback and mints equal WETH balance.
+contract MockWETH is MockERC20 {
+    receive() external payable {
+        balanceOf[msg.sender] += msg.value;
+        totalSupply += msg.value;
+        emit Transfer(address(0), msg.sender, msg.value);
+    }
+}
+
 contract OrderFlowTest is Test {
     using OrderFlowOrder for OrderFlowOrder.Data;
     using GPv2Order for GPv2Order.Data;
@@ -254,6 +263,70 @@ contract OrderFlowTest is Test {
         _fundCounterfactualAddress(order);
         (address deployed,) = factory.placeOrder(order);
         assertEq(OrderFlowSender(deployed).isValidSignature(bytes32(uint256(999)), ""), bytes4(type(uint32).max));
+    }
+
+    // ============================================================
+    // placeOrder - native ETH wrapping
+    // ============================================================
+
+    function test_placeOrder_wrapsNativeEth() public {
+        MockWETH weth = new MockWETH();
+
+        OrderFlowOrder.Data memory order = OrderFlowOrder.Data({
+            sellToken:        IERC20(address(weth)),
+            buyToken:         IERC20(address(buyToken)),
+            receiver:         receiver,
+            owner:            owner,
+            minSellAmount:    0,
+            buyAmount:        0,
+            appData:          bytes32(0),
+            feeAmount:        0,
+            validTo:          uint32(block.timestamp + 1 hours),
+            partiallyFillable: false,
+            quoteId:          0
+        });
+
+        uint256 ethAmount = 1 ether;
+        vm.deal(address(this), ethAmount);
+        (address deployed, bytes32 oHash) = factory.placeOrder{value: ethAmount}(order);
+
+        // ETH should have been wrapped: clone holds WETH, no ETH
+        assertEq(weth.balanceOf(deployed), ethAmount);
+        assertEq(deployed.balance, 0);
+
+        // Signature should be valid for the hash computed from the actual WETH sell amount
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
+    }
+
+    function test_placeOrder_wrapsNativeEthAndErc20Combined() public {
+        MockWETH weth = new MockWETH();
+
+        OrderFlowOrder.Data memory order = OrderFlowOrder.Data({
+            sellToken:        IERC20(address(weth)),
+            buyToken:         IERC20(address(buyToken)),
+            receiver:         receiver,
+            owner:            owner,
+            minSellAmount:    0,
+            buyAmount:        0,
+            appData:          bytes32(0),
+            feeAmount:        0,
+            validTo:          uint32(block.timestamp + 1 hours),
+            partiallyFillable: false,
+            quoteId:          0
+        });
+
+        // Pre-fund the counterfactual address with some WETH, then top up with ETH via placeOrder
+        uint256 preFunded = 0.5 ether;
+        uint256 ethSent   = 0.5 ether;
+        address predicted = factory.getOrderAddress(order);
+        weth.mint(predicted, preFunded);
+
+        vm.deal(address(this), ethSent);
+        (address deployed, bytes32 oHash) = factory.placeOrder{value: ethSent}(order);
+
+        assertEq(deployed, predicted);
+        assertEq(weth.balanceOf(deployed), preFunded + ethSent);
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
     }
 
     // ============================================================
