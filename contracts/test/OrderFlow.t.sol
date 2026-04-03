@@ -410,6 +410,57 @@ contract OrderFlowTest is Test {
     }
 
     // ============================================================
+    // placeOrderWithDeposit Tests
+    // ============================================================
+
+    function test_placeOrderWithDeposit_deploysAndFunds() public {
+        OrderFlowOrder.Data memory order = _defaultOrder();
+
+        tokenA.mint(owner, DEFAULT_FUND);
+        vm.startPrank(owner);
+        tokenA.approve(address(factory), DEFAULT_FUND);
+        (address deployed, bytes32 oHash) = factory.placeOrderWithDeposit(order, DEFAULT_FUND);
+        vm.stopPrank();
+
+        assertTrue(deployed.code.length > 0);
+        assertTrue(oHash != bytes32(0));
+        assertEq(OrderFlowSender(deployed).isValidSignature(oHash, ""), GPv2EIP1271.MAGICVALUE);
+        assertEq(tokenA.allowance(deployed, vaultRelayer), DEFAULT_FUND);
+    }
+
+    function test_placeOrderWithDeposit_revertsIfInsufficientAllowance() public {
+        OrderFlowOrder.Data memory order = _defaultOrder();
+        tokenA.mint(owner, DEFAULT_FUND);
+
+        vm.startPrank(owner);
+        tokenA.approve(address(factory), DEFAULT_FUND - 1);
+        vm.expectRevert();
+        factory.placeOrderWithDeposit(order, DEFAULT_FUND);
+        vm.stopPrank();
+    }
+
+    function test_placeOrderWithDeposit_equivalentToManualPreFund() public {
+        OrderFlowOrder.Data memory order1 = _defaultOrder();
+        OrderFlowOrder.Data memory order2 = _defaultOrder();
+        order2.quoteId = 99;
+
+        // Manual pre-fund flow
+        _fundCounterfactualAddress(order1);
+        (address deployed1, bytes32 hash1) = factory.placeOrder(order1);
+
+        // placeOrderWithDeposit flow
+        tokenA.mint(owner, DEFAULT_FUND);
+        vm.startPrank(owner);
+        tokenA.approve(address(factory), DEFAULT_FUND);
+        (address deployed2, bytes32 hash2) = factory.placeOrderWithDeposit(order2, DEFAULT_FUND);
+        vm.stopPrank();
+
+        assertEq(OrderFlowSender(deployed1).isValidSignature(hash1, ""), GPv2EIP1271.MAGICVALUE);
+        assertEq(OrderFlowSender(deployed2).isValidSignature(hash2, ""), GPv2EIP1271.MAGICVALUE);
+        assertEq(tokenA.allowance(deployed1, vaultRelayer), tokenA.allowance(deployed2, vaultRelayer));
+    }
+
+    // ============================================================
     // Bungee executeData Tests
     // ============================================================
 

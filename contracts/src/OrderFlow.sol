@@ -2,6 +2,7 @@
 pragma solidity ^0.8;
 
 import "openzeppelin-contracts/contracts/proxy/Clones.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import "./OrderFlowSender.sol";
 import "./interfaces/IOrderFlow.sol";
@@ -40,6 +41,20 @@ contract OrderFlow is IOrderFlow, CoWSwapOnchainOrders {
         override
         returns (address orderFlow, bytes32 orderHash)
     {
+        return _triggerOrderCreation(order);
+    }
+
+    /// @inheritdoc IOrderFlow
+    function placeOrderWithDeposit(OrderFlowOrder.Data calldata order, uint256 sellAmount)
+        external
+        payable
+        override
+        returns (address orderFlow, bytes32 orderHash)
+    {
+        address orderAddress = _getOrderAddress(order);
+        
+        SafeERC20.safeTransferFrom(order.sellToken, msg.sender, orderAddress, sellAmount);
+
         return _triggerOrderCreation(order);
     }
 
@@ -83,7 +98,7 @@ contract OrderFlow is IOrderFlow, CoWSwapOnchainOrders {
         // Compute the sell amount: total balance minus the fee.
         // The counterfactual address must be pre-funded before this call.
         uint256 balance = order.sellToken.balanceOf(address(sender));
-        uint256 sellAmount = balance - order.feeAmount;
+        uint256 sellAmount = balance > order.feeAmount ? balance - order.feeAmount : 0;
 
         GPv2Order.Data memory cowOrder = order.toCoWSwapOrder(sellAmount);
         orderHash = cowOrder.hash(cowSwapDomainSeparator);

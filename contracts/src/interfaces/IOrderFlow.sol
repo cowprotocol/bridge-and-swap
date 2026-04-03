@@ -19,6 +19,17 @@ interface IOrderFlow {
         external
         payable
         returns (address orderFlow, bytes32 orderHash);
+    
+    /// @dev Same as placeOrder, but also transfers the specified sell amount from the caller to the OrderFlowSender in the same transaction. This is more convenient and can be more gas-efficient.
+    /// Before calling this function, the OrderFlow contract must be approved to transfer at least `sellAmount` sell tokens on behalf of the caller.
+    /// @param order The order data describing the order to be created.
+    /// @param sellAmount The amount of the sell token to transfer to the OrderFlowSender
+    /// @return orderFlow The address of the deployed OrderFlowSender contract.
+    /// @return orderHash The hash of the CoW Swap order that was created.
+    function placeOrderWithDeposit(OrderFlowOrder.Data calldata order, uint256 sellAmount)
+        external
+        payable
+        returns (address orderFlow, bytes32 orderHash);
 
     /// @dev Computes the deterministic address of an OrderFlowSender contract for a given order.
     ///
